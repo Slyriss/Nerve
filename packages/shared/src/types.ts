@@ -1,0 +1,232 @@
+export type TaskType =
+  | "Essay writing"
+  | "General writing"
+  | "Coding"
+  | "Research"
+  | "Study"
+  | "Email or admin"
+  | "Design or creative"
+  | "Planning";
+
+export const taskTypes: TaskType[] = [
+  "Essay writing",
+  "General writing",
+  "Coding",
+  "Research",
+  "Study",
+  "Email or admin",
+  "Design or creative",
+  "Planning"
+];
+
+export type SessionStatus = "active" | "paused" | "completed";
+export type StepStatus = "pending" | "active" | "complete";
+export type AIProviderName = "mock" | "deepseek";
+export type UserState =
+  | "on_task"
+  | "productive_drift"
+  | "unproductive_drift"
+  | "stuck"
+  | "thinking"
+  | "progress"
+  | "unknown";
+export type TaskRelevance = "on_task" | "possibly_related" | "off_task" | "unknown";
+export type ProgressState = "changed" | "unchanged" | "complete_suggested" | "unknown";
+export type InterventionType = "none" | "step_card" | "drift_card" | "thinking_hold";
+export type Urgency = "low" | "medium";
+export type BreadcrumbRelevance = "productive" | "unproductive" | "unknown";
+export type DisplayLanguage = "en" | "zh";
+
+export interface PlanStepDraft {
+  title: string;
+  nextAction: string;
+  explanation: string;
+}
+
+export interface GeneratePlanInput {
+  goal: string;
+  taskType: TaskType;
+  language?: DisplayLanguage;
+  deadlineText?: string;
+  activeApp?: string;
+  windowTitle?: string;
+  screenSummary?: string;
+}
+
+export interface GeneratePlanOutput {
+  steps: PlanStepDraft[];
+}
+
+export interface AnalyzeScreenInput {
+  sessionGoal: string;
+  taskType: TaskType;
+  language?: DisplayLanguage;
+  currentStep: PlanStepDraft & {
+    id?: string;
+    atomizationLevel?: number;
+    delayCount?: number;
+  };
+  activeApp: string;
+  windowTitle: string;
+  elapsedOnCurrentStepSeconds: number;
+  elapsedInCurrentAppSeconds: number;
+  screenshotChangedSinceLastCapture: boolean;
+  recentBreadcrumbs: BreadcrumbDraft[];
+  delayCount: number;
+  atomizationLevel: number;
+  thinkingPauseActive: boolean;
+  screenSummary?: string;
+}
+
+export interface AnalyzeScreenOutput {
+  userState: UserState;
+  taskRelevance: TaskRelevance;
+  progressState: ProgressState;
+  activeContext: string;
+  visibleChangeSummary: string;
+  conciseExplanation: string;
+  suggestedNextAction: string;
+  suggestedStepComplete: boolean;
+  shouldIntervene: boolean;
+  interventionType: InterventionType;
+  urgency: Urgency;
+  breadcrumbRelevance: BreadcrumbRelevance;
+}
+
+export interface AtomizeStepInput {
+  goal: string;
+  taskType: TaskType;
+  language?: DisplayLanguage;
+  currentStepTitle: string;
+  currentNextAction: string;
+  atomizationLevel: number;
+  delayCount: number;
+}
+
+export interface AtomizeStepOutput {
+  nextAction: string;
+  explanation: string;
+  atomizationLevel: number;
+}
+
+export interface AIProvider {
+  readonly name: AIProviderName;
+  generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput>;
+  analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput>;
+  atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput>;
+}
+
+export interface SessionRecord {
+  id: string;
+  goal: string;
+  taskType: TaskType;
+  deadlineText: string;
+  status: SessionStatus;
+  startedAt: string;
+  endedAt?: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface StepRecord {
+  id: string;
+  sessionId: string;
+  orderIndex: number;
+  title: string;
+  nextAction: string;
+  explanation: string;
+  status: StepStatus;
+  atomizationLevel: number;
+  delayCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface ScreenshotRecord {
+  id: string;
+  sessionId: string;
+  filePath: string;
+  thumbnailPath: string;
+  capturedAt: string;
+  activeApp: string;
+  windowTitle: string;
+  perceptualHash: string;
+  aiState?: UserState;
+  stepTitle?: string;
+  createdAt: string;
+}
+
+export interface AIObservationRecord extends AnalyzeScreenOutput {
+  id: string;
+  sessionId: string;
+  screenshotId?: string | null;
+  provider: AIProviderName;
+  model: string;
+  rawJson: string;
+  createdAt: string;
+}
+
+export interface EventRecord {
+  id: string;
+  sessionId: string;
+  type: string;
+  message: string;
+  metadataJson: string;
+  createdAt: string;
+}
+
+export interface BreadcrumbDraft {
+  appName: string;
+  windowTitle: string;
+  relevance: BreadcrumbRelevance;
+  startedAt: string;
+  endedAt?: string | null;
+  durationSeconds?: number;
+}
+
+export interface BreadcrumbRecord extends BreadcrumbDraft {
+  id: string;
+  sessionId: string;
+}
+
+export interface NerveSettings {
+  aiProvider: AIProviderName;
+  deepseekApiKey: string;
+  deepseekModel: string;
+  screenshotIntervalSeconds: 10 | 30 | 60;
+  stuckThresholdMinutes: 5 | 8 | 10;
+  driftThresholdMinutes: 3 | 6 | 10;
+  thinkingPauseMinutes: 3 | 5 | 10;
+  panelOpacity: 0.3 | 0.5 | 0.8;
+  storeScreenshots: boolean;
+  language: DisplayLanguage;
+}
+
+export interface AppSnapshot {
+  session: SessionRecord | null;
+  steps: StepRecord[];
+  activeStep: StepRecord | null;
+  screenshots: ScreenshotRecord[];
+  events: EventRecord[];
+  breadcrumbs: BreadcrumbRecord[];
+  observations: AIObservationRecord[];
+  settings: NerveSettings;
+  overlayExpanded: boolean;
+  delayUntil: string | null;
+  thinkingPauseUntil: string | null;
+  screenshotFolder: string;
+}
+
+export const defaultSettings: NerveSettings = {
+  aiProvider: "mock",
+  deepseekApiKey: "",
+  deepseekModel: "deepseek-chat",
+  screenshotIntervalSeconds: 60,
+  stuckThresholdMinutes: 8,
+  driftThresholdMinutes: 6,
+  thinkingPauseMinutes: 5,
+  panelOpacity: 0.5,
+  storeScreenshots: true,
+  language: "en"
+};

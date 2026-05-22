@@ -1,0 +1,18 @@
+{
+  "name": "nerve",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Windows-first private ADHD co-pilot overlay for essay writing.",
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm --filter @nerve/desktop dev",
+    "build": "pnpm -r build",
+    "typecheck": "pnpm --filter @nerve/shared build && pnpm -r typecheck",
+    "lint": "pnpm -r lint"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.7",
+    "typescript": "^5.7.3"
+  },
+  "packageManager": "pnpm@9.15.4"
+}

@@ -1,0 +1,39 @@
+{
+  "name": "@nerve/desktop",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently -k \"vite --host 127.0.0.1\" \"tsc -p ../../packages/shared/tsconfig.json --watch --preserveWatchOutput\" \"tsc -p tsconfig.main.json --watch --preserveWatchOutput\" \"wait-on tcp:5173 file:../../packages/shared/dist/index.js file:dist/main/main.js && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "vite build && tsc -p tsconfig.main.json",
+    "postinstall": "electron-rebuild -f -w better-sqlite3 -w active-win",
+    "rebuild:native": "electron-rebuild -f -w better-sqlite3 -w active-win",
+    "smoke": "pnpm build && cross-env NERVE_SMOKE_TEST=1 electron .",
+    "break": "pnpm build && cross-env NERVE_BREAK_TEST=1 electron .",
+    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "lint": "tsc -p tsconfig.json --noEmit && tsc -p tsconfig.main.json --noEmit"
+  },
+  "dependencies": {
+    "@nerve/shared": "workspace:*",
+    "active-win": "^9.0.0",
+    "better-sqlite3": "^12.10.0",
+    "drizzle-orm": "^0.45.0",
+    "lucide-react": "^0.468.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@electron/rebuild": "^4.0.4",
+    "@types/better-sqlite3": "^7.6.12",
+    "@types/react": "^19.0.7",
+    "@types/react-dom": "^19.0.3",
+    "@vitejs/plugin-react": "^4.3.4",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^34.0.0",
+    "vite": "^6.0.7",
+    "wait-on": "^8.0.1"
+  }
+}

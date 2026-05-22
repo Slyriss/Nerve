@@ -1,0 +1,43 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+out/
+release/
+.vite/
+
+# Electron local data
+NerveData/
+
+# Environment
+.env
+
+# Logs
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# SQLite
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# Editor / IDE
+.vscode/
+.idea/
+*.suo
+*.user
+*.swp
+
+# Claude Code project settings
+.claude/
+
+# Temp
+*.tmp
+*.temp

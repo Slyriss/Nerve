@@ -12,7 +12,8 @@ import type {
   AtomizeStepInput,
   AtomizeStepOutput,
   GeneratePlanInput,
-  GeneratePlanOutput
+  GeneratePlanOutput,
+  TaskType
 } from "./types.js";
 
 const plans = {
@@ -90,16 +91,54 @@ const plans = {
     ["Assign a time or place", "Put the action on a calendar, list, or note.", "Give it a home."],
     ["Identify one blocker", "Write one thing that might interrupt the plan.", "Name it without solving everything."],
     ["Save the plan", "Save, pin, or leave the plan visible.", "Make it easy to return."]
+  ],
+  "Mixed work": [
+    ["Open the main work surface", "Bring the main document, editor, inbox, or task note into view.", "Start with the place that anchors the session."],
+    ["Name the current lane", "Write or select the one lane you are working in first: writing, coding, admin, research, study, design, or planning.", "This keeps mixed work from becoming a blur."],
+    ["Finish one tiny action in that lane", "Do the next physical action for the current lane.", "One lane gets one small move."],
+    ["Record the handoff", "Write one short note about what changed or what remains.", "This protects context before switching."],
+    ["Switch to the next needed lane", "Open the next relevant app or document for the next scope.", "Switching is allowed when it is part of the plan."],
+    ["Do one tiny action in the new lane", "Complete one physical action in the new scope.", "Keep the switch contained."],
+    ["Close the loop", "Save, mark done, or write the next follow-up.", "End with a clear resume point."]
   ]
 } as const;
 
 const defaultPlan = (input: GeneratePlanInput): GeneratePlanOutput => ({
-  steps: (plans[input.taskType] ?? plans["General writing"]).map(([title, nextAction, explanation]) => ({
+  steps: buildPlan(input).map(({ draft: [title, nextAction, explanation], taskType }) => ({
     title,
     nextAction,
-    explanation
+    explanation,
+    taskType
   }))
 });
+
+function normalizeScopes(input: Pick<GeneratePlanInput | AnalyzeScreenInput | AtomizeStepInput, "taskType"> & { taskTypes?: TaskType[]; sessionTaskTypes?: TaskType[] }) {
+  const scopes = input.taskTypes ?? input.sessionTaskTypes ?? [input.taskType];
+  const valid = scopes.filter((scope) => scope !== "Mixed work");
+  return valid.length ? valid : [input.taskType === "Mixed work" ? "General writing" : input.taskType];
+}
+
+function buildPlan(input: GeneratePlanInput) {
+  const scopes = normalizeScopes(input);
+  if (input.taskType !== "Mixed work" && scopes.length <= 1) {
+    const taskType = scopes[0] ?? input.taskType;
+    return (plans[taskType] ?? plans["General writing"]).map((draft) => ({ draft, taskType }));
+  }
+  const plan = [
+    { draft: plans["Mixed work"][0], taskType: "Planning" as TaskType },
+    { draft: plans["Mixed work"][1], taskType: "Planning" as TaskType }
+  ];
+  for (const scope of scopes) {
+    const template = plans[scope] ?? plans["General writing"];
+    plan.push(
+      { draft: template[0], taskType: scope },
+      { draft: template[Math.min(2, template.length - 1)], taskType: scope },
+      { draft: template[Math.min(4, template.length - 1)], taskType: scope }
+    );
+  }
+  plan.push({ draft: plans["Mixed work"][3], taskType: "Planning" as TaskType });
+  return plan;
+}
 
 function looksTaskRelated(input: AnalyzeScreenInput, text: string): boolean {
   const goalWords = input.sessionGoal
@@ -118,142 +157,25 @@ function looksTaskRelated(input: AnalyzeScreenInput, text: string): boolean {
     "Design or creative": /figma|canva|photoshop|illustrator|design|canvas|image|video|audio|editor|asset|prototype/i,
     Planning: /calendar|todo|task|notion|notes|planner|trello|linear|asana|schedule|plan/i
   };
-  return (patterns[input.taskType] ?? patterns["General writing"]).test(text);
+  return normalizeScopes(input).some((scope) => (patterns[scope] ?? patterns["General writing"]).test(text));
+}
+
+function detectTaskType(input: AnalyzeScreenInput, text: string): TaskType {
+  const patterns: Record<string, RegExp> = {
+    "Essay writing": /essay|thesis|introduction|conclusion|citation|paper/i,
+    "General writing": /word|doc|docs|notion|notes|draft|editor|markdown|writing/i,
+    Coding: /code|codex|vscode|visual studio|terminal|powershell|github|git|localhost|api|error|test|typescript|python/i,
+    Research: /research|article|pdf|journal|paper|library|scholar|citation|zotero|source|search/i,
+    Study: /course|lecture|slides|quiz|assignment|canvas|classroom|textbook/i,
+    "Email or admin": /mail|outlook|gmail|calendar|form|portal|drive|invoice|application|account/i,
+    "Design or creative": /figma|canva|photoshop|illustrator|design|canvas|image|video|audio|prototype/i,
+    Planning: /calendar|todo|task|planner|trello|linear|asana|schedule|plan/i
+  };
+  return normalizeScopes(input).find((scope) => (patterns[scope] ?? /$a/).test(text)) ?? input.currentStep.taskType ?? input.taskType;
 }
 
 function looksDistracting(text: string): boolean {
   return /discord|youtube|tiktok|instagram|reddit|netflix|game|steam|chat/i.test(text);
-}
-
-export class MockAIProvider implements AIProvider {
-  readonly name = "mock" as const;
-
-  async generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput> {
-    return defaultPlan(input);
-  }
-
-  async analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput> {
-    const context = `${input.activeApp} ${input.windowTitle}`;
-    const related = looksTaskRelated(input, context);
-    const distracting = looksDistracting(context);
-    const noChangeLong = !input.screenshotChangedSinceLastCapture && input.elapsedOnCurrentStepSeconds >= 60;
-
-    if (input.thinkingPauseActive) {
-      return {
-        userState: "thinking",
-        taskRelevance: related ? "on_task" : "unknown",
-        progressState: "unknown",
-        activeContext: context || "Unknown app",
-        visibleChangeSummary: "Thinking pause is active.",
-        conciseExplanation: "Got it. I’ll hold this step while you think.",
-        suggestedNextAction: input.currentStep.nextAction,
-        suggestedStepComplete: false,
-        shouldIntervene: false,
-        interventionType: "thinking_hold",
-        urgency: "low",
-        breadcrumbRelevance: "unknown"
-      };
-    }
-
-    if (distracting) {
-      return {
-        userState: "unproductive_drift",
-        taskRelevance: "off_task",
-        progressState: input.screenshotChangedSinceLastCapture ? "changed" : "unchanged",
-        activeContext: context,
-        visibleChangeSummary: "The active window looks away from the essay.",
-        conciseExplanation: "You’re away from the task. The next step is still here.",
-        suggestedNextAction: input.currentStep.nextAction,
-        suggestedStepComplete: false,
-        shouldIntervene: input.elapsedInCurrentAppSeconds >= 60,
-        interventionType: "drift_card",
-        urgency: "medium",
-        breadcrumbRelevance: "unproductive"
-      };
-    }
-
-    if (related && input.screenshotChangedSinceLastCapture) {
-      return {
-        userState: "progress",
-        taskRelevance: "on_task",
-        progressState: "changed",
-        activeContext: context,
-        visibleChangeSummary: "The screen changed while a task-related window is active.",
-        conciseExplanation: "This looks like progress. I’ll keep the step ready.",
-        suggestedNextAction: input.currentStep.nextAction,
-        suggestedStepComplete: input.elapsedOnCurrentStepSeconds > 180,
-        shouldIntervene: false,
-        interventionType: "none",
-        urgency: "low",
-        breadcrumbRelevance: "productive"
-      };
-    }
-
-    if (related && noChangeLong) {
-      return {
-        userState: "stuck",
-        taskRelevance: "on_task",
-        progressState: "unchanged",
-        activeContext: context,
-        visibleChangeSummary: "The document has not visibly changed yet.",
-        conciseExplanation: "Still with you. The document has not visibly changed yet. Try one small action.",
-        suggestedNextAction: input.currentStep.nextAction,
-        suggestedStepComplete: false,
-        shouldIntervene: true,
-        interventionType: "step_card",
-        urgency: "medium",
-        breadcrumbRelevance: "productive"
-      };
-    }
-
-    if (related) {
-      return {
-        userState: "on_task",
-        taskRelevance: "on_task",
-        progressState: input.screenshotChangedSinceLastCapture ? "changed" : "unchanged",
-        activeContext: context,
-        visibleChangeSummary: "The active window appears related to the task.",
-        conciseExplanation: "This looks related. I’ll keep the next step ready.",
-        suggestedNextAction: input.currentStep.nextAction,
-        suggestedStepComplete: false,
-        shouldIntervene: false,
-        interventionType: "none",
-        urgency: "low",
-        breadcrumbRelevance: "productive"
-      };
-    }
-
-    return {
-      userState: "unknown",
-      taskRelevance: "unknown",
-      progressState: input.screenshotChangedSinceLastCapture ? "changed" : "unchanged",
-      activeContext: context || "Unknown app",
-      visibleChangeSummary: "The current screen is hard to classify.",
-      conciseExplanation: "No rush. I’ll keep the next step ready.",
-      suggestedNextAction: input.currentStep.nextAction,
-      suggestedStepComplete: false,
-      shouldIntervene: false,
-      interventionType: "none",
-      urgency: "low",
-      breadcrumbRelevance: "unknown"
-    };
-  }
-
-  async atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput> {
-    const ladder = [
-      input.currentNextAction,
-      "Click into the document.",
-      input.taskType === "Coding" ? "Move your cursor to the editor or terminal." : "Move your cursor to the work area.",
-      "Put your hand on the mouse or trackpad.",
-      "Take one breath and look at the current window title."
-    ];
-    const level = Math.min(input.atomizationLevel + 1, ladder.length - 1);
-    return {
-      nextAction: ladder[level],
-      explanation: "This is a smaller physical action. No extra decision is needed.",
-      atomizationLevel: level
-    };
-  }
 }
 
 export class DeepSeekAIProvider implements AIProvider {

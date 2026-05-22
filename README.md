@@ -36,9 +36,17 @@ Mock mode is the default and works without any setup. DeepSeek adds real screen-
 
 ## Install
 
+**Windows:**
 ```powershell
 pnpm install
 ```
+
+**macOS:** Xcode Command Line Tools are required to compile native modules (`better-sqlite3`, `active-win`). Install them first, then:
+```bash
+xcode-select --install
+pnpm install
+```
+On first run, grant **Screen Recording** and **Accessibility** permissions when prompted. See [macOS notes](#macos) below.
 
 ## Run in development
 
@@ -99,8 +107,23 @@ Mock mode makes zero network requests. DeepSeek mode sends session context (goal
 
 See `CLAUDE.md` for a full developer reference including the IPC API, how to add task types and AI providers, and known constraints.
 
+## macOS
+
+The app runs on macOS with graceful degradation:
+
+| Feature | macOS |
+|---|---|
+| Core UI, sessions, SQLite | Full |
+| Always-on-top overlay | Full |
+| safeStorage (API key) | Full — uses Keychain |
+| Mica background blur | Not available — standard window |
+| Screen capture | Requires Screen Recording permission |
+| Active window detection | Requires Accessibility permission |
+
+If either permission is denied, the app continues running — AI analysis falls back to text-only context and window detection returns `"Unknown app"`.
+
 ## Limitations
 
-- Windows only (active-window detection uses Windows APIs)
+- Active development on Windows 11 — macOS works with noted caveats, Linux untested
 - Read-only — Nerve does not automate, click, or type
 - Not a medical device or clinical ADHD treatment

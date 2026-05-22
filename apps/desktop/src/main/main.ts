@@ -7,7 +7,6 @@ import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import {
   DeepSeekAIProvider,
-  MockAIProvider,
   defaultSettings,
   type AIObservationRecord,
   type AIProvider,
@@ -17,9 +16,11 @@ import {
   type BreadcrumbRelevance,
   type EventRecord,
   type NerveSettings,
+  type PlanStepDraft,
   type ScreenshotRecord,
   type SessionRecord,
   type StepRecord,
+  type TaskHistoryRecord,
   type TaskType
 } from "@nerve/shared";
 import { schema, settingsTable } from "./db/schema.js";
@@ -61,7 +62,7 @@ const DELAY_MINUTES = 5;
 const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 
 const settingOptions = {
-  aiProvider: ["mock", "deepseek"],
+  aiProvider: ["deepseek"],
   screenshotIntervalSeconds: [10, 30, 60],
   stuckThresholdMinutes: [5, 8, 10],
   driftThresholdMinutes: [3, 6, 10],
@@ -75,6 +76,24 @@ const screenshotDir = () => path.join(dataDir(), "screenshots");
 const dbPath = () => path.join(dataDir(), "nerve.sqlite");
 const now = () => new Date().toISOString();
 const id = () => crypto.randomUUID();
+const validTaskTypes: TaskType[] = [
+  "Essay writing",
+  "General writing",
+  "Coding",
+  "Research",
+  "Study",
+  "Email or admin",
+  "Design or creative",
+  "Planning",
+  "Mixed work"
+];
+
+function normalizeTaskScopes(taskTypes: Array<TaskType | undefined>): TaskType[] {
+  const scopes = taskTypes.filter((type): type is TaskType => Boolean(type) && validTaskTypes.includes(type as TaskType));
+  const expanded = scopes.includes("Mixed work") ? scopes.filter((scope) => scope !== "Mixed work") : scopes;
+  const unique = [...new Set(expanded)];
+  return unique.length ? unique : ["General writing"];
+}
 
 function encryptApiKey(value: string): string {
   if (!value || !safeStorage.isEncryptionAvailable()) return value;
@@ -99,12 +118,14 @@ function ensureStorage() {
   db.exec(`
     CREATE TABLE IF NOT EXISTS sessions (
       id TEXT PRIMARY KEY, goal TEXT NOT NULL, task_type TEXT NOT NULL, deadline_text TEXT NOT NULL,
-      status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
+      status TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+      task_types_json TEXT NOT NULL DEFAULT '[]'
     );
     CREATE TABLE IF NOT EXISTS steps (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, order_index INTEGER NOT NULL, title TEXT NOT NULL,
       next_action TEXT NOT NULL, explanation TEXT NOT NULL, status TEXT NOT NULL, atomization_level INTEGER NOT NULL,
-      delay_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
+      delay_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
+      task_type TEXT NOT NULL DEFAULT 'General writing'
     );
     CREATE TABLE IF NOT EXISTS screenshots (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, thumbnail_path TEXT NOT NULL,
@@ -117,7 +138,7 @@ function ensureStorage() {
       active_context TEXT NOT NULL, visible_change_summary TEXT NOT NULL, concise_explanation TEXT NOT NULL,
       suggested_next_action TEXT NOT NULL, suggested_step_complete INTEGER NOT NULL, should_intervene INTEGER NOT NULL,
       intervention_type TEXT NOT NULL, urgency TEXT NOT NULL, breadcrumb_relevance TEXT NOT NULL,
-      raw_json TEXT NOT NULL, created_at TEXT NOT NULL
+      detected_task_type TEXT, raw_json TEXT NOT NULL, created_at TEXT NOT NULL
     );
     CREATE TABLE IF NOT EXISTS events (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, type TEXT NOT NULL, message TEXT NOT NULL,
@@ -127,6 +148,11 @@ function ensureStorage() {
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, app_name TEXT NOT NULL, window_title TEXT NOT NULL,
       relevance TEXT NOT NULL, started_at TEXT NOT NULL, ended_at TEXT, duration_seconds INTEGER
     );
+    CREATE TABLE IF NOT EXISTS task_history (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, task_type TEXT NOT NULL, source TEXT NOT NULL,
+      confidence TEXT NOT NULL, summary TEXT NOT NULL, step_id TEXT, active_app TEXT, window_title TEXT,
+      created_at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
     );
@@ -135,7 +161,11 @@ function ensureStorage() {
     CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_observations_session ON ai_observations(session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_breadcrumbs_session ON breadcrumbs(session_id, started_at);
+    CREATE INDEX IF NOT EXISTS idx_task_history_session ON task_history(session_id, created_at);
   `);
+  ensureColumn("sessions", "task_types_json", "TEXT NOT NULL DEFAULT '[]'");
+  ensureColumn("steps", "task_type", "TEXT NOT NULL DEFAULT 'General writing'");
+  ensureColumn("ai_observations", "detected_task_type", "TEXT");
   for (const [key, value] of Object.entries(defaultSettings)) {
     orm.insert(settingsTable)
       .values({ key, value: JSON.stringify(value), updatedAt: now() })
@@ -145,9 +175,16 @@ function ensureStorage() {
   applyUserRequestedDefaults();
 }
 
+function ensureColumn(table: string, column: string, definition: string) {
+  const columns = db.prepare(`PRAGMA table_info(${table})`).all() as Array<{ name: string }>;
+  if (!columns.some((entry) => entry.name === column)) {
+    db.prepare(`ALTER TABLE ${table} ADD COLUMN ${column} ${definition}`).run();
+  }
+}
+
 function applyUserRequestedDefaults() {
   const timestamp = now();
-  for (const [key, value] of Object.entries({ screenshotIntervalSeconds: 60, panelOpacity: 0.5 })) {
+  for (const [key, value] of Object.entries({ aiProvider: "deepseek", screenshotIntervalSeconds: 60, panelOpacity: 0.5 })) {
     orm.insert(settingsTable)
       .values({ key, value: JSON.stringify(value), updatedAt: timestamp })
       .onConflictDoUpdate({
@@ -173,10 +210,13 @@ function registerLocalFileProtocol() {
 }
 
 function rowSession(row: any): SessionRecord {
+  const taskType = row.task_type as TaskType;
+  const taskTypes = parseTaskTypes(row.task_types_json, taskType);
   return {
     id: row.id,
     goal: row.goal,
-    taskType: row.task_type,
+    taskType,
+    taskTypes,
     deadlineText: row.deadline_text,
     status: row.status,
     startedAt: row.started_at,
@@ -194,6 +234,7 @@ function rowStep(row: any): StepRecord {
     title: row.title,
     nextAction: row.next_action,
     explanation: row.explanation,
+    taskType: row.task_type || "General writing",
     status: row.status,
     atomizationLevel: row.atomization_level,
     delayCount: row.delay_count,
@@ -201,6 +242,16 @@ function rowStep(row: any): StepRecord {
     updatedAt: row.updated_at,
     completedAt: row.completed_at
   };
+}
+
+function parseTaskTypes(value: string | null | undefined, fallback: TaskType): TaskType[] {
+  try {
+    const parsed = JSON.parse(value || "[]");
+    if (Array.isArray(parsed) && parsed.length > 0) return parsed as TaskType[];
+  } catch {
+    /* older rows may not have multi-scope data */
+  }
+  return [fallback];
 }
 
 function rowScreenshot(row: any): ScreenshotRecord {
@@ -238,6 +289,7 @@ function rowObservation(row: any): AIObservationRecord {
     interventionType: row.intervention_type,
     urgency: row.urgency,
     breadcrumbRelevance: row.breadcrumb_relevance,
+    detectedTaskType: row.detected_task_type,
     rawJson: row.raw_json,
     createdAt: row.created_at
   };
@@ -264,6 +316,21 @@ function rowBreadcrumb(row: any): BreadcrumbRecord {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     durationSeconds: row.duration_seconds
+  };
+}
+
+function rowTaskHistory(row: any): TaskHistoryRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    taskType: row.task_type,
+    source: row.source,
+    confidence: row.confidence,
+    summary: row.summary,
+    stepId: row.step_id,
+    activeApp: row.active_app,
+    windowTitle: row.window_title,
+    createdAt: row.created_at
   };
 }
 
@@ -374,6 +441,14 @@ function activateNextPendingStep(sessionId: string, afterOrderIndex = -1) {
       .get(sessionId) as any);
   if (fallbackStep) {
     db.prepare("UPDATE steps SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, fallbackStep.id);
+    addTaskHistory(
+      sessionId,
+      (fallbackStep.task_type || "General writing") as TaskType,
+      "step_active",
+      "high",
+      `Active step changed: ${fallbackStep.title}`,
+      { stepId: fallbackStep.id }
+    );
     return rowStep(fallbackStep);
   }
   db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, sessionId);
@@ -393,11 +468,36 @@ function addEvent(sessionId: string, type: string, message: string, metadata: Re
   );
 }
 
+function addTaskHistory(
+  sessionId: string,
+  taskType: TaskType,
+  source: TaskHistoryRecord["source"],
+  confidence: TaskHistoryRecord["confidence"],
+  summary: string,
+  details: { stepId?: string | null; activeApp?: string | null; windowTitle?: string | null } = {}
+) {
+  const recent = db
+    .prepare("SELECT task_type, source, summary FROM task_history WHERE session_id = ? ORDER BY created_at DESC LIMIT 1")
+    .get(sessionId) as { task_type: string; source: string; summary: string } | undefined;
+  if (recent?.task_type === taskType && recent.source === source && recent.summary === summary) return;
+  db.prepare(`INSERT INTO task_history (
+    id, session_id, task_type, source, confidence, summary, step_id, active_app, window_title, created_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+    id(),
+    sessionId,
+    taskType,
+    source,
+    confidence,
+    summary,
+    details.stepId ?? null,
+    details.activeApp ?? null,
+    details.windowTitle ?? null,
+    now()
+  );
+}
+
 function provider(settings = getSettings()): AIProvider {
-  if (settings.aiProvider === "deepseek") {
-    return new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
-  }
-  return new MockAIProvider();
+  return new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
 }
 
 let activeWinFn: (() => Promise<any>) | null = null;
@@ -565,11 +665,13 @@ async function analyzeTick() {
     const analyzeInput: AnalyzeScreenInput = {
       sessionGoal: session.goal,
       taskType: session.taskType,
+      sessionTaskTypes: session.taskTypes,
       language: settings.language,
       currentStep: {
         title: activeStep.title,
         nextAction: activeStep.nextAction,
         explanation: activeStep.explanation,
+        taskType: activeStep.taskType,
         id: activeStep.id,
         atomizationLevel: activeStep.atomizationLevel,
         delayCount: activeStep.delayCount
@@ -585,17 +687,27 @@ async function analyzeTick() {
       thinkingPauseActive: thinkingActive
     };
     let selectedProvider = provider(settings);
-    let observation = await selectedProvider
-      .analyzeScreen(analyzeInput)
-      .catch(async (error: unknown) => {
-        addEvent(session.id, "provider_error", "DeepSeek was unavailable. Falling back to Mock mode.", { error: String(error) });
-        selectedProvider = new MockAIProvider();
-        return selectedProvider.analyzeScreen(analyzeInput);
-      });
+    let observation;
+    try {
+      observation = await selectedProvider.analyzeScreen(analyzeInput);
+    } catch (error) {
+      addEvent(session.id, "provider_error", "DeepSeek analysis failed. Check the API key, model, or network connection.", { error: String(error) });
+      overlayExpanded = true;
+      broadcast();
+      return;
+    }
     observation = {
       ...observation,
       suggestedNextAction: ensurePhysicalAction(observation.suggestedNextAction, activeStep.nextAction)
     };
+    addTaskHistory(
+      session.id,
+      observation.detectedTaskType ?? activeStep.taskType,
+      "screen_detected",
+      observation.detectedTaskType ? "medium" : "low",
+      observation.conciseExplanation,
+      { stepId: activeStep.id, activeApp, windowTitle }
+    );
 
     const stuckReached = observation.userState === "stuck" && elapsedOnStep >= settings.stuckThresholdMinutes * 60 && !thinkingActive;
     const driftReached =
@@ -612,8 +724,8 @@ async function analyzeTick() {
     db.prepare(`INSERT INTO ai_observations (
       id, session_id, screenshot_id, provider, model, user_state, task_relevance, progress_state, active_app,
       active_context, visible_change_summary, concise_explanation, suggested_next_action, suggested_step_complete,
-      should_intervene, intervention_type, urgency, breadcrumb_relevance, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      should_intervene, intervention_type, urgency, breadcrumb_relevance, detected_task_type, raw_json, created_at
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       obsId,
       session.id,
       screenshotId,
@@ -632,6 +744,7 @@ async function analyzeTick() {
       observation.interventionType,
       observation.urgency,
       observation.breadcrumbRelevance,
+      observation.detectedTaskType ?? null,
       JSON.stringify(observation),
       now()
     );
@@ -691,6 +804,7 @@ function snapshot(): AppSnapshot {
     events: sessionId ? (db.prepare("SELECT * FROM events WHERE session_id = ? ORDER BY created_at DESC LIMIT 120").all(sessionId) as any[]).map(rowEvent) : [],
     breadcrumbs: sessionId ? (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at DESC LIMIT 40").all(sessionId) as any[]).map(rowBreadcrumb) : [],
     observations: sessionId ? (db.prepare("SELECT * FROM ai_observations WHERE session_id = ? ORDER BY created_at DESC LIMIT 50").all(sessionId) as any[]).map(rowObservation) : [],
+    taskHistory: sessionId ? (db.prepare("SELECT * FROM task_history WHERE session_id = ? ORDER BY created_at DESC LIMIT 80").all(sessionId) as any[]).map(rowTaskHistory) : [],
     settings: getSettings(),
     overlayExpanded,
     delayUntil,
@@ -809,48 +923,46 @@ function registerIpc() {
     currentBreadcrumbKey = null;
     currentBreadcrumbStartedAt = null;
     cachedSettings = null;
-    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs;");
+    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history;");
     fs.rmSync(screenshotDir(), { recursive: true, force: true });
     fs.mkdirSync(screenshotDir(), { recursive: true });
     broadcast();
   });
-  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType }) => {
+  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[] }) => {
     const goal = typeof input.goal === "string" ? input.goal.trim() : "";
     if (!goal) {
       throw new Error("A goal is required.");
     }
-    const taskType = input.taskType ?? "General writing";
+    const taskTypes = normalizeTaskScopes(input.taskTypes?.length ? input.taskTypes : [input.taskType ?? "General writing"]);
+    const taskType = taskTypes.length > 1 ? "Mixed work" : taskTypes[0];
     const timestamp = now();
     const sessionId = id();
-    let planProvider = provider();
+    const planProvider = provider();
     const activeWindow = await getActiveWindowFallback();
-    const plan = await planProvider
-      .generatePlan({
-        goal,
-        taskType,
-        language: getSettings().language,
-        deadlineText: input.deadlineText || "",
-        activeApp: activeWindow.activeApp,
-        windowTitle: activeWindow.windowTitle
-      })
-      .catch(async (_error: unknown) => {
-        planProvider = new MockAIProvider();
-        return planProvider.generatePlan({ goal, taskType, language: getSettings().language, deadlineText: input.deadlineText || "" });
-      });
+    const plan = await planProvider.generatePlan({
+      goal,
+      taskType,
+      taskTypes,
+      language: getSettings().language,
+      deadlineText: input.deadlineText || "",
+      activeApp: activeWindow.activeApp,
+      windowTitle: activeWindow.windowTitle
+    });
 
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status = 'active'").run(timestamp, timestamp);
-    db.prepare("INSERT INTO sessions (id, goal, task_type, deadline_text, status, started_at, ended_at, created_at, updated_at) VALUES (?, ?, ?, ?, 'active', ?, NULL, ?, ?)").run(
+    db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)").run(
       sessionId,
       goal,
       taskType,
+      JSON.stringify(taskTypes),
       input.deadlineText || "",
       timestamp,
       timestamp,
       timestamp
     );
-    const stmt = db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)");
-    plan.steps.forEach((step: { title: string; nextAction: string; explanation: string }, index: number) =>
-      stmt.run(id(), sessionId, index, step.title, step.nextAction, step.explanation, index === 0 ? "active" : "pending", timestamp, timestamp)
+    const stmt = db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)");
+    plan.steps.forEach((step: PlanStepDraft, index: number) =>
+      stmt.run(id(), sessionId, index, step.title, step.nextAction, step.explanation, step.taskType ?? taskType, index === 0 ? "active" : "pending", timestamp, timestamp)
     );
     activeSessionId = sessionId;
     overlayExpanded = false;
@@ -858,7 +970,14 @@ function registerIpc() {
     delayUntil = null;
     thinkingPauseUntil = null;
     previousHash = null;
-    addEvent(sessionId, "session_started", "Session started.", { goal, provider: planProvider.name });
+    addEvent(sessionId, "session_started", "Session started.", { goal, provider: planProvider.name, taskTypes });
+    for (const scope of taskTypes) {
+      addTaskHistory(sessionId, scope, "session_start", "high", `Session scope added: ${scope}`);
+    }
+    const firstStep = getActiveStep(sessionId);
+    if (firstStep) {
+      addTaskHistory(sessionId, firstStep.taskType, "step_active", "high", `Active step: ${firstStep.title}`, { stepId: firstStep.id });
+    }
     resetCaptureLoop();
     void analyzeTick();
     broadcast();
@@ -901,6 +1020,7 @@ function registerIpc() {
       title: "title",
       nextAction: "next_action",
       explanation: "explanation",
+      taskType: "task_type",
       status: "status",
       orderIndex: "order_index"
     } as const;
@@ -928,13 +1048,14 @@ function registerIpc() {
     const nextIndexRow = db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 idx FROM steps WHERE session_id = ?").get(sessionId) as { idx: number };
     const nextIndex = Number(nextIndexRow.idx);
     const timestamp = now();
-    db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, NULL)").run(
+    db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, NULL)").run(
       id(),
       sessionId,
       nextIndex,
       "New step",
       "Write one small sentence.",
       "Keep it small and concrete.",
+      getActiveSession()?.taskTypes[0] ?? "General writing",
       timestamp,
       timestamp
     );
@@ -1013,33 +1134,28 @@ function registerIpc() {
 
     if (action === "atomize") {
       const ai = provider();
-      const smaller = await ai
-        .atomizeStep({
+      try {
+        const smaller = await ai.atomizeStep({
           goal: session.goal,
-          taskType: session.taskType,
+          taskType: step.taskType,
+          sessionTaskTypes: session.taskTypes,
           language: getSettings().language,
           currentStepTitle: step.title,
           currentNextAction: step.nextAction,
           atomizationLevel: step.atomizationLevel,
           delayCount: step.delayCount
-        })
-        .catch(() => new MockAIProvider().atomizeStep({
-          goal: session.goal,
-          taskType: session.taskType,
-          language: getSettings().language,
-          currentStepTitle: step.title,
-          currentNextAction: step.nextAction,
-          atomizationLevel: step.atomizationLevel,
-          delayCount: step.delayCount
-        }));
-      db.prepare("UPDATE steps SET next_action = ?, explanation = ?, atomization_level = ?, updated_at = ? WHERE id = ?").run(
-        smaller.nextAction,
-        smaller.explanation,
-        smaller.atomizationLevel,
-        timestamp,
-        step.id
-      );
-      addEvent(session.id, "step_atomized", "The next action was made smaller.", { ...smaller });
+        });
+        db.prepare("UPDATE steps SET next_action = ?, explanation = ?, atomization_level = ?, updated_at = ? WHERE id = ?").run(
+          smaller.nextAction,
+          smaller.explanation,
+          smaller.atomizationLevel,
+          timestamp,
+          step.id
+        );
+        addEvent(session.id, "step_atomized", "The next action was made smaller.", { ...smaller });
+      } catch (error) {
+        addEvent(session.id, "provider_error", "DeepSeek could not make the step smaller. Check the API key, model, or network connection.", { error: String(error) });
+      }
       overlayExpanded = true;
     }
 

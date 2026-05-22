@@ -115,11 +115,37 @@ No migration system — schema changes require `db.exec("ALTER TABLE ...")` in `
 
 ## Known constraints
 
-- **Windows only** — `active-win` has a Windows-optimised path; macOS/Linux not tested
+- **Windows primary** — the app is designed and tested on Windows 11. macOS works with caveats (see below).
+- **Linux** — untested; `active-win` has no Linux support, all screen capture is untested.
 - `safeStorage` requires the app to be `ready` — never call `encryptApiKey`/`decryptApiKey` before `app.whenReady()`
 - `applyUserRequestedDefaults()` forces `screenshotIntervalSeconds: 60` and `panelOpacity: 0.5` on every startup — these are intentionally locked for the current UX design
 - The preload (`preload.cts`) compiles to `.cjs` — the `webPreferences.preload` path uses `preload.cjs`
 - Both windows use the same preload — overlay-specific actions (`setOverlayExpanded`) are available in the main window too
+
+## macOS compatibility
+
+The app **runs on macOS** with graceful degradation. Prerequisites and caveats:
+
+### Required setup
+1. **Xcode Command Line Tools** — both `better-sqlite3` and `active-win` are native Node addons compiled by `@electron/rebuild` on `postinstall`. Without Xcode CLT, `pnpm install` will fail.
+   ```bash
+   xcode-select --install
+   ```
+
+### Permissions (prompted on first run)
+- **Screen Recording** (`System Preferences → Privacy & Security → Screen Recording`) — required for `desktopCapturer`. If denied, screenshot analysis silently fails with `capture_error` logged; the app continues running but AI has no visual context.
+- **Accessibility** (`System Preferences → Privacy & Security → Accessibility`) — required for `active-win` (active window detection). If denied, falls back to `"Unknown app"` gracefully.
+
+### Feature differences on macOS
+| Feature | macOS behavior |
+|---|---|
+| Mica background blur (`backgroundMaterial: "mica"`) | Silently ignored — standard opaque window |
+| Screen capture | Works if Screen Recording permission granted |
+| Active window detection | Works if Accessibility permission granted |
+| `safeStorage` | Full — uses macOS Keychain |
+| SQLite, IPC, all CRUD | Full |
+| Always-on-top overlay | Full |
+| `setVisibleOnAllWorkspaces` | Full |
 
 ## Feature improvement opportunities
 

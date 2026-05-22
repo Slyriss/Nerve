@@ -6,7 +6,8 @@ export type TaskType =
   | "Study"
   | "Email or admin"
   | "Design or creative"
-  | "Planning";
+  | "Planning"
+  | "Mixed work";
 
 export const taskTypes: TaskType[] = [
   "Essay writing",
@@ -16,12 +17,13 @@ export const taskTypes: TaskType[] = [
   "Study",
   "Email or admin",
   "Design or creative",
-  "Planning"
+  "Planning",
+  "Mixed work"
 ];
 
 export type SessionStatus = "active" | "paused" | "completed";
 export type StepStatus = "pending" | "active" | "complete";
-export type AIProviderName = "mock" | "deepseek";
+export type AIProviderName = "deepseek";
 export type UserState =
   | "on_task"
   | "productive_drift"
@@ -41,11 +43,13 @@ export interface PlanStepDraft {
   title: string;
   nextAction: string;
   explanation: string;
+  taskType?: TaskType;
 }
 
 export interface GeneratePlanInput {
   goal: string;
   taskType: TaskType;
+  taskTypes?: TaskType[];
   language?: DisplayLanguage;
   deadlineText?: string;
   activeApp?: string;
@@ -60,6 +64,7 @@ export interface GeneratePlanOutput {
 export interface AnalyzeScreenInput {
   sessionGoal: string;
   taskType: TaskType;
+  sessionTaskTypes?: TaskType[];
   language?: DisplayLanguage;
   currentStep: PlanStepDraft & {
     id?: string;
@@ -91,11 +96,13 @@ export interface AnalyzeScreenOutput {
   interventionType: InterventionType;
   urgency: Urgency;
   breadcrumbRelevance: BreadcrumbRelevance;
+  detectedTaskType?: TaskType;
 }
 
 export interface AtomizeStepInput {
   goal: string;
   taskType: TaskType;
+  sessionTaskTypes?: TaskType[];
   language?: DisplayLanguage;
   currentStepTitle: string;
   currentNextAction: string;
@@ -120,6 +127,7 @@ export interface SessionRecord {
   id: string;
   goal: string;
   taskType: TaskType;
+  taskTypes: TaskType[];
   deadlineText: string;
   status: SessionStatus;
   startedAt: string;
@@ -135,6 +143,7 @@ export interface StepRecord {
   title: string;
   nextAction: string;
   explanation: string;
+  taskType: TaskType;
   status: StepStatus;
   atomizationLevel: number;
   delayCount: number;
@@ -176,6 +185,19 @@ export interface EventRecord {
   createdAt: string;
 }
 
+export interface TaskHistoryRecord {
+  id: string;
+  sessionId: string;
+  taskType: TaskType;
+  source: "session_start" | "step_active" | "screen_detected" | "manual";
+  confidence: "low" | "medium" | "high";
+  summary: string;
+  stepId?: string | null;
+  activeApp?: string | null;
+  windowTitle?: string | null;
+  createdAt: string;
+}
+
 export interface BreadcrumbDraft {
   appName: string;
   windowTitle: string;
@@ -211,6 +233,7 @@ export interface AppSnapshot {
   events: EventRecord[];
   breadcrumbs: BreadcrumbRecord[];
   observations: AIObservationRecord[];
+  taskHistory: TaskHistoryRecord[];
   settings: NerveSettings;
   overlayExpanded: boolean;
   delayUntil: string | null;
@@ -219,7 +242,7 @@ export interface AppSnapshot {
 }
 
 export const defaultSettings: NerveSettings = {
-  aiProvider: "mock",
+  aiProvider: "deepseek",
   deepseekApiKey: "",
   deepseekModel: "deepseek-chat",
   screenshotIntervalSeconds: 60,

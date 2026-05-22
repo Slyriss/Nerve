@@ -3,7 +3,20 @@ import { z } from "zod";
 export const planStepDraftSchema = z.object({
   title: z.string().min(1),
   nextAction: z.string().min(1),
-  explanation: z.string().min(1)
+  explanation: z.string().min(1),
+  taskType: z
+    .enum([
+      "Essay writing",
+      "General writing",
+      "Coding",
+      "Research",
+      "Study",
+      "Email or admin",
+      "Design or creative",
+      "Planning",
+      "Mixed work"
+    ])
+    .optional()
 });
 
 export const generatePlanOutputSchema = z.object({
@@ -30,7 +43,20 @@ export const analyzeScreenOutputSchema = z.object({
   shouldIntervene: z.boolean(),
   interventionType: z.enum(["none", "step_card", "drift_card", "thinking_hold"]),
   urgency: z.enum(["low", "medium"]),
-  breadcrumbRelevance: z.enum(["productive", "unproductive", "unknown"])
+  breadcrumbRelevance: z.enum(["productive", "unproductive", "unknown"]),
+  detectedTaskType: z
+    .enum([
+      "Essay writing",
+      "General writing",
+      "Coding",
+      "Research",
+      "Study",
+      "Email or admin",
+      "Design or creative",
+      "Planning",
+      "Mixed work"
+    ])
+    .optional()
 });
 
 export const atomizeStepOutputSchema = z.object({

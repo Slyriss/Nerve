@@ -3,7 +3,7 @@ import type { AppSnapshot, NerveSettings, StepRecord, TaskType } from "@nerve/sh
 
 const nerve = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:getSnapshot"),
-  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType }): Promise<AppSnapshot> =>
+  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[] }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:startSession", input),
   updateStep: (stepId: string, patch: Partial<StepRecord>): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateStep", stepId, patch),

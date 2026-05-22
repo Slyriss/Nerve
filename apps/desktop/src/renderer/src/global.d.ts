@@ -4,7 +4,7 @@ type NerveAction = "done" | "thinking" | "delay" | "atomize" | "markDone" | "kee
 
 interface NerveBridge {
   getSnapshot: () => Promise<AppSnapshot>;
-  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType }) => Promise<AppSnapshot>;
+  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[] }) => Promise<AppSnapshot>;
   updateStep: (stepId: string, patch: Partial<StepRecord>) => Promise<AppSnapshot>;
   addStep: (sessionId: string) => Promise<AppSnapshot>;
   deleteStep: (stepId: string) => Promise<AppSnapshot>;

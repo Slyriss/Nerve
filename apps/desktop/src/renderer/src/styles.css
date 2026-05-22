@@ -299,6 +299,29 @@ h2 {
   color: var(--sage);
 }
 
+.scope-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.scope-chip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 8px 10px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+}
+
+.scope-chip input {
+  width: 16px;
+  height: 16px;
+}
+
 .notice {
   background: rgba(255, 247, 224, 0.62);
   border: 1px solid rgba(221, 184, 90, 0.26);
@@ -336,6 +359,16 @@ h2 {
   font-size: 11px;
   color: var(--faint);
   font-weight: 700;
+}
+
+.task-badge {
+  justify-self: start;
+  border-radius: 999px;
+  padding: 4px 8px;
+  background: rgba(232, 246, 240, 0.68);
+  color: #38685c;
+  font-size: 11px;
+  font-weight: 680;
 }
 
 .action-text {
@@ -520,6 +553,36 @@ h2 {
 
 .event-row strong {
   font-weight: 680;
+}
+
+.task-history {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.task-history h3 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.task-history article {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 13px;
+  background: rgba(255, 255, 255, 0.46);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+}
+
+.task-history span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.task-history p {
+  margin: 0;
+  font-size: 12px;
 }
 
 .thumb-grid {

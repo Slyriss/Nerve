@@ -4,6 +4,7 @@ export const sessions = sqliteTable("sessions", {
   id: text("id").primaryKey(),
   goal: text("goal").notNull(),
   taskType: text("task_type").notNull(),
+  taskTypesJson: text("task_types_json").notNull().default("[]"),
   deadlineText: text("deadline_text").notNull(),
   status: text("status").notNull(),
   startedAt: text("started_at").notNull(),
@@ -19,6 +20,7 @@ export const steps = sqliteTable("steps", {
   title: text("title").notNull(),
   nextAction: text("next_action").notNull(),
   explanation: text("explanation").notNull(),
+  taskType: text("task_type").notNull().default("General writing"),
   status: text("status").notNull(),
   atomizationLevel: integer("atomization_level").notNull(),
   delayCount: integer("delay_count").notNull(),
@@ -82,6 +84,19 @@ export const breadcrumbs = sqliteTable("breadcrumbs", {
   durationSeconds: integer("duration_seconds")
 });
 
+export const taskHistory = sqliteTable("task_history", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  taskType: text("task_type").notNull(),
+  source: text("source").notNull(),
+  confidence: text("confidence").notNull(),
+  summary: text("summary").notNull(),
+  stepId: text("step_id"),
+  activeApp: text("active_app"),
+  windowTitle: text("window_title"),
+  createdAt: text("created_at").notNull()
+});
+
 export const settingsTable = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -95,5 +110,6 @@ export const schema = {
   aiObservations,
   events,
   breadcrumbs,
+  taskHistory,
   settingsTable
 };

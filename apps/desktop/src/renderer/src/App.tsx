@@ -335,7 +335,7 @@ function SessionStart({
 }) {
   const [goal, setGoal] = useState("");
   const [deadlineText, setDeadlineText] = useState("");
-  const [taskType, setTaskType] = useState<TaskType>("General writing");
+  const [selectedTaskTypes, setSelectedTaskTypes] = useState<TaskType[]>(["General writing"]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const t = useCopy(settings.language);
@@ -344,7 +344,7 @@ function SessionStart({
     setBusy(true);
     setError("");
     try {
-      setSnapshot(await window.nerve.startSession({ goal: goal.trim(), deadlineText: deadlineText.trim(), taskType }));
+      setSnapshot(await window.nerve.startSession({ goal: goal.trim(), deadlineText: deadlineText.trim(), taskTypes: selectedTaskTypes }));
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "The session could not start.");
     } finally {
@@ -365,13 +365,23 @@ function SessionStart({
         </label>
         <label>
           {t("taskType")}
-          <select value={taskType} onChange={(event) => setTaskType(event.target.value as TaskType)}>
-            {taskTypes.map((type) => (
-              <option key={type} value={type}>
-                {type}
-              </option>
+          <div className="scope-grid">
+            {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
+              <label className="scope-chip" key={type}>
+                <input
+                  type="checkbox"
+                  checked={selectedTaskTypes.includes(type)}
+                  onChange={(event) => {
+                    setSelectedTaskTypes((current) => {
+                      const next = event.target.checked ? [...current, type] : current.filter((item) => item !== type);
+                      return next.length ? next : [type];
+                    });
+                  }}
+                />
+                <span>{type}</span>
+              </label>
             ))}
-          </select>
+          </div>
         </label>
         <label>
           {t("optionalDeadline")}
@@ -379,7 +389,7 @@ function SessionStart({
         </label>
         <div className="fixed-row">
           <span>{t("mode")}</span>
-          <strong>{taskType}</strong>
+          <strong>{selectedTaskTypes.length > 1 ? "Mixed work" : selectedTaskTypes[0]}</strong>
         </div>
         <p className="notice">{t("screenshotNotice")}</p>
         {error && <p className="error-note">{error}</p>}
@@ -391,7 +401,7 @@ function SessionStart({
             <Settings size={16} /> {t("settings")}
           </button>
         </div>
-        <p className="subtle">{t("currentProvider")}: {settings.aiProvider === "mock" ? "Mock" : "DeepSeek"}</p>
+        <p className="subtle">{t("currentProvider")}: DeepSeek</p>
       </div>
     </section>
   );
@@ -479,6 +489,7 @@ function StepCard({
   return (
     <section className="step-card">
       <p className="eyebrow">{t("currentStep")}</p>
+      <span className="task-badge">{step.taskType}</span>
       <h2>{step.title}</h2>
       <p className="action-text">{observation?.suggestedNextAction || step.nextAction}</p>
       <p className="muted">
@@ -537,6 +548,11 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
               <input defaultValue={step.title} onBlur={(event) => patch(step, { title: event.currentTarget.value })} />
               <textarea defaultValue={step.nextAction} onBlur={(event) => patch(step, { nextAction: event.currentTarget.value })} />
               <input defaultValue={step.explanation} onBlur={(event) => patch(step, { explanation: event.currentTarget.value })} />
+              <select value={step.taskType} onChange={(event) => patch(step, { taskType: event.currentTarget.value as TaskType })}>
+                {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
+                  <option key={type} value={type}>{type}</option>
+                ))}
+              </select>
               <span>{step.status}</span>
             </div>
             <div className="step-controls">
@@ -583,6 +599,18 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
     <section className="log-layout">
       <div className="events">
         <h2>Session log</h2>
+        {snapshot.taskHistory.length > 0 && (
+          <div className="task-history">
+            <h3>Task history</h3>
+            {snapshot.taskHistory.slice(0, 12).map((entry) => (
+              <article key={entry.id}>
+                <strong>{entry.taskType}</strong>
+                <span>{entry.source.replaceAll("_", " ")} · {entry.confidence}</span>
+                <p>{entry.summary}</p>
+              </article>
+            ))}
+          </div>
+        )}
         {snapshot.events.map((event) => (
           <article className="event-row" key={event.id}>
             <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
@@ -627,7 +655,10 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
       <h2>{t("settings")}</h2>
       <div className="settings-grid">
         <Select label={t("language")} value={settings.language} onChange={(value) => save({ language: value as NerveSettings["language"] })} options={["en", "zh"]} labels={{ en: t("english"), zh: t("mandarin") }} />
-        <Select label={t("aiProvider")} value={settings.aiProvider} onChange={(value) => save({ aiProvider: value as NerveSettings["aiProvider"] })} options={["mock", "deepseek"]} />
+        <label>
+          {t("aiProvider")}
+          <input value="DeepSeek" readOnly />
+        </label>
         <label>
           {t("deepseekKey")}
           <input type="password" value={settings.deepseekApiKey} onChange={(event) => setSettings({ ...settings, deepseekApiKey: event.target.value })} onBlur={() => save({ deepseekApiKey: settings.deepseekApiKey })} />

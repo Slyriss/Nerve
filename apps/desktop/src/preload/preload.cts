@@ -1,10 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppSnapshot, NerveSettings, StepRecord, TaskType } from "@nerve/shared";
+import type { AppSnapshot, NerveSettings, PlanStepDraft, StepRecord, TaskType } from "@nerve/shared";
 
 const nerve = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:getSnapshot"),
-  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[] }): Promise<AppSnapshot> =>
+  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:startSession", input),
+  parseTaskList: (input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }): Promise<{ steps: PlanStepDraft[]; taskTypes: TaskType[] }> =>
+    ipcRenderer.invoke("nerve:parseTaskList", input),
   updateStep: (stepId: string, patch: Partial<StepRecord>): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateStep", stepId, patch),
   addStep: (sessionId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:addStep", sessionId),

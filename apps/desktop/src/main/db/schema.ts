@@ -21,6 +21,9 @@ export const steps = sqliteTable("steps", {
   nextAction: text("next_action").notNull(),
   explanation: text("explanation").notNull(),
   taskType: text("task_type").notNull().default("General writing"),
+  deadlineText: text("deadline_text").notNull().default(""),
+  dueAt: text("due_at"),
+  reminderAt: text("reminder_at"),
   status: text("status").notNull(),
   atomizationLevel: integer("atomization_level").notNull(),
   delayCount: integer("delay_count").notNull(),
@@ -60,6 +63,7 @@ export const aiObservations = sqliteTable("ai_observations", {
   interventionType: text("intervention_type").notNull(),
   urgency: text("urgency").notNull(),
   breadcrumbRelevance: text("breadcrumb_relevance").notNull(),
+  detectedTaskType: text("detected_task_type"),
   rawJson: text("raw_json").notNull(),
   createdAt: text("created_at").notNull()
 });
@@ -97,6 +101,21 @@ export const taskHistory = sqliteTable("task_history", {
   createdAt: text("created_at").notNull()
 });
 
+export const reminders = sqliteTable("reminders", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  stepId: text("step_id"),
+  taskType: text("task_type").notNull(),
+  title: text("title").notNull(),
+  message: text("message").notNull(),
+  deadlineText: text("deadline_text").notNull(),
+  dueAt: text("due_at"),
+  reminderAt: text("reminder_at").notNull(),
+  status: text("status").notNull(),
+  createdAt: text("created_at").notNull(),
+  triggeredAt: text("triggered_at")
+});
+
 export const settingsTable = sqliteTable("settings", {
   key: text("key").primaryKey(),
   value: text("value").notNull(),
@@ -111,5 +130,6 @@ export const schema = {
   events,
   breadcrumbs,
   taskHistory,
+  reminders,
   settingsTable
 };

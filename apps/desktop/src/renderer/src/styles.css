@@ -322,6 +322,64 @@ h2 {
   height: 16px;
 }
 
+.parsed-timetable {
+  display: grid;
+  gap: 10px;
+  padding: 12px;
+  border-radius: 16px;
+  background: rgba(255, 255, 255, 0.42);
+  border: 1px solid rgba(255, 255, 255, 0.58);
+}
+
+.parsed-timetable h3 {
+  margin: 0;
+  font-size: 16px;
+}
+
+.timetable-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.45fr) minmax(260px, 1fr) minmax(140px, 0.35fr);
+  gap: 10px;
+  align-items: stretch;
+  padding: 10px;
+  border-radius: 14px;
+  background: rgba(255, 255, 255, 0.56);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+}
+
+.time-cell,
+.activity-fields,
+.activity-controls {
+  display: grid;
+  gap: 7px;
+}
+
+.time-cell span {
+  width: 28px;
+  height: 28px;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: rgba(232, 246, 240, 0.74);
+  color: #38685c;
+  font-weight: 730;
+}
+
+.timetable-row input,
+.timetable-row textarea,
+.timetable-row select {
+  min-height: 34px;
+  font-size: 13px;
+}
+
+.timetable-row textarea {
+  min-height: 54px;
+}
+
+.activity-controls {
+  align-content: start;
+}
+
 .notice {
   background: rgba(255, 247, 224, 0.62);
   border: 1px solid rgba(221, 184, 90, 0.26);
@@ -369,6 +427,13 @@ h2 {
   color: #38685c;
   font-size: 11px;
   font-weight: 680;
+}
+
+.deadline-line {
+  margin: 0;
+  color: #75613d;
+  font-size: 12px;
+  font-weight: 650;
 }
 
 .action-text {
@@ -491,6 +556,17 @@ h2 {
   opacity: 0.68;
 }
 
+.deadline-fields {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.deadline-fields label {
+  gap: 4px;
+  font-size: 11px;
+}
+
 .step-index {
   width: 30px;
   height: 30px;
@@ -582,6 +658,33 @@ h2 {
 
 .task-history p {
   margin: 0;
+  font-size: 12px;
+}
+
+.reminder-list {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 16px;
+}
+
+.reminder-list article {
+  display: grid;
+  gap: 3px;
+  padding: 10px;
+  border-radius: 13px;
+  background: rgba(255, 247, 225, 0.56);
+  border: 1px solid rgba(216, 177, 82, 0.28);
+}
+
+.reminder-list article.triggered,
+.reminder-list article.dismissed {
+  opacity: 0.62;
+}
+
+.reminder-list span,
+.reminder-list p {
+  margin: 0;
+  color: var(--muted);
   font-size: 12px;
 }
 
@@ -716,6 +819,82 @@ body:has(.overlay) {
   display: grid;
   align-content: start;
   gap: 8px;
+}
+
+.side-toggle {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.side-toggle button {
+  min-height: 28px;
+  border-radius: 11px;
+  font-size: 10px;
+}
+
+.side-toggle button.active {
+  background: rgba(79, 126, 113, 0.82);
+  color: white;
+}
+
+.side-timetable {
+  display: grid;
+  gap: 6px;
+  max-height: calc(100vh - 118px);
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.side-timetable article {
+  display: grid;
+  grid-template-columns: 48px 1fr;
+  gap: 7px;
+  padding: 8px;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.62);
+}
+
+.side-timetable article.current {
+  background: rgba(232, 246, 240, 0.72);
+  border-color: rgba(69, 124, 107, 0.32);
+  box-shadow: inset 3px 0 0 rgba(69, 124, 107, 0.74);
+}
+
+.side-timetable article.complete {
+  opacity: 0.58;
+}
+
+.side-timetable article.past-due {
+  background: rgba(255, 247, 225, 0.72);
+}
+
+.side-time,
+.side-activity {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.side-time strong {
+  font-size: 11px;
+  color: #33413b;
+}
+
+.side-time span,
+.side-activity span,
+.side-activity p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.side-activity strong {
+  font-size: 11px;
+  line-height: 1.25;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 .overlay-expanded .step-card {

@@ -5,6 +5,16 @@ export type TaskType =
   | "Research"
   | "Study"
   | "Email or admin"
+  | "Presentation"
+  | "Personal / life"
+  | "Health / self-care"
+  | "Household / chores"
+  | "Errands"
+  | "Meals"
+  | "Pet care"
+  | "Exercise"
+  | "Social / communication"
+  | "Finance / bills"
   | "Design or creative"
   | "Planning"
   | "Mixed work";
@@ -16,6 +26,16 @@ export const taskTypes: TaskType[] = [
   "Research",
   "Study",
   "Email or admin",
+  "Presentation",
+  "Personal / life",
+  "Health / self-care",
+  "Household / chores",
+  "Errands",
+  "Meals",
+  "Pet care",
+  "Exercise",
+  "Social / communication",
+  "Finance / bills",
   "Design or creative",
   "Planning",
   "Mixed work"
@@ -38,12 +58,16 @@ export type InterventionType = "none" | "step_card" | "drift_card" | "thinking_h
 export type Urgency = "low" | "medium";
 export type BreadcrumbRelevance = "productive" | "unproductive" | "unknown";
 export type DisplayLanguage = "en" | "zh";
+export type ReminderStatus = "scheduled" | "triggered" | "dismissed";
 
 export interface PlanStepDraft {
   title: string;
   nextAction: string;
   explanation: string;
   taskType?: TaskType;
+  deadlineText?: string;
+  dueAt?: string | null;
+  reminderAt?: string | null;
 }
 
 export interface GeneratePlanInput {
@@ -54,6 +78,8 @@ export interface GeneratePlanInput {
   deadlineText?: string;
   activeApp?: string;
   windowTitle?: string;
+  currentDateTime?: string;
+  timezone?: string;
   screenSummary?: string;
 }
 
@@ -144,6 +170,9 @@ export interface StepRecord {
   nextAction: string;
   explanation: string;
   taskType: TaskType;
+  deadlineText: string;
+  dueAt?: string | null;
+  reminderAt?: string | null;
   status: StepStatus;
   atomizationLevel: number;
   delayCount: number;
@@ -183,6 +212,21 @@ export interface EventRecord {
   message: string;
   metadataJson: string;
   createdAt: string;
+}
+
+export interface ReminderRecord {
+  id: string;
+  sessionId: string;
+  stepId?: string | null;
+  taskType: TaskType;
+  title: string;
+  message: string;
+  deadlineText: string;
+  dueAt?: string | null;
+  reminderAt: string;
+  status: ReminderStatus;
+  createdAt: string;
+  triggeredAt?: string | null;
 }
 
 export interface TaskHistoryRecord {
@@ -234,6 +278,7 @@ export interface AppSnapshot {
   breadcrumbs: BreadcrumbRecord[];
   observations: AIObservationRecord[];
   taskHistory: TaskHistoryRecord[];
+  reminders: ReminderRecord[];
   settings: NerveSettings;
   overlayExpanded: boolean;
   delayUntil: string | null;

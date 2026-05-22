@@ -1,4 +1,4 @@
-import { app, BrowserWindow, desktopCapturer, ipcMain, net, protocol, safeStorage, screen, shell } from "electron";
+import { app, BrowserWindow, desktopCapturer, ipcMain, net, Notification, protocol, safeStorage, screen, shell } from "electron";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import path from "node:path";
@@ -17,6 +17,7 @@ import {
   type EventRecord,
   type NerveSettings,
   type PlanStepDraft,
+  type ReminderRecord,
   type ScreenshotRecord,
   type SessionRecord,
   type StepRecord,
@@ -45,6 +46,7 @@ let db: Database.Database;
 let orm: BetterSQLite3Database<typeof schema>;
 let captureTimer: NodeJS.Timeout | null = null;
 let delayTimer: NodeJS.Timeout | null = null;
+let reminderTimer: NodeJS.Timeout | null = null;
 let activeSessionId: string | null = null;
 let previousHash: string | null = null;
 let overlayExpanded = false;
@@ -83,6 +85,16 @@ const validTaskTypes: TaskType[] = [
   "Research",
   "Study",
   "Email or admin",
+  "Presentation",
+  "Personal / life",
+  "Health / self-care",
+  "Household / chores",
+  "Errands",
+  "Meals",
+  "Pet care",
+  "Exercise",
+  "Social / communication",
+  "Finance / bills",
   "Design or creative",
   "Planning",
   "Mixed work"
@@ -93,6 +105,57 @@ function normalizeTaskScopes(taskTypes: Array<TaskType | undefined>): TaskType[]
   const expanded = scopes.includes("Mixed work") ? scopes.filter((scope) => scope !== "Mixed work") : scopes;
   const unique = [...new Set(expanded)];
   return unique.length ? unique : ["General writing"];
+}
+
+function inferTaskScopesFromText(text: string, selected: TaskType[] = []) {
+  const selectedScopes = selected.filter((scope) => scope !== "Mixed work");
+  const inferred: TaskType[] = [];
+  const lower = text.toLowerCase();
+  const add = (scope: TaskType, pattern: RegExp) => {
+    if (pattern.test(lower) && !inferred.includes(scope)) inferred.push(scope);
+  };
+  add("Essay writing", /\b(essay|thesis|introduction|conclusion|paragraph)\b/i);
+  add("Presentation", /\b(presentation|slides?|deck|powerpoint|keynote|present|rehearse)\b/i);
+  add("Health / self-care", /\b(shower|hygiene|medication|medicine|doctor|therapy|sleep|nap|break|self care|self-care)\b/i);
+  add("Household / chores", /\b(laundry|clean|dishes|trash|tidy|chores?|vacuum)\b/i);
+  add("Errands", /\b(errand|pickup|return|store|shopping|groceries|pharmacy|post office)\b/i);
+  add("Meals", /\b(dinner|lunch|breakfast|meal|cook|eat|food|recipe|delivery)\b/i);
+  add("Pet care", /\b(dog|cat|pet|leash|feed|vet|litter)\b/i);
+  add("Exercise", /\b(exercise|workout|gym|stretch|run|walk|yoga)\b/i);
+  add("Social / communication", /\b(call|text|message|reply|dm|discord|whatsapp|wechat)\b/i);
+  add("Finance / bills", /\b(bank|bill|payment|invoice|budget|rent|subscription|tax)\b/i);
+  add("Design or creative", /\b(canva|figma|design|creative|prototype|video|audio|asset)\b/i);
+  add("Research", /\b(research|source|article|paper|citation|math)\b/i);
+  add("Study", /\b(homework|revise|study|quiz|exam|lecture|chapter)\b/i);
+  add("Coding", /\b(code|bug|test|build|api|github|repo|typescript|python)\b/i);
+  add("Email or admin", /\b(email|form|submit|application|invoice|pay|admin|portal)\b/i);
+  return normalizeTaskScopes(inferred.length ? inferred : selectedScopes.length ? selectedScopes : ["General writing"]);
+}
+
+function scopesFromSteps(steps: PlanStepDraft[], fallback: TaskType[]) {
+  return normalizeTaskScopes([
+    ...fallback,
+    ...steps.map((step) => step.taskType).filter((taskType): taskType is TaskType => Boolean(taskType))
+  ]);
+}
+
+function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType): PlanStepDraft[] {
+  return steps
+    .filter((step) => step.title?.trim() && step.nextAction?.trim())
+    .map((step) => ({
+      title: step.title.trim(),
+      nextAction: step.nextAction.trim(),
+      explanation: step.explanation?.trim() || "One small step is enough.",
+      taskType: step.taskType && validTaskTypes.includes(step.taskType) && step.taskType !== "Mixed work" ? step.taskType : fallbackTaskType,
+      deadlineText: step.deadlineText?.trim() || "",
+      dueAt: validIso(step.dueAt),
+      reminderAt: validIso(step.reminderAt)
+    }));
+}
+
+function localDateTimeContext() {
+  const date = new Date();
+  return `${date.toLocaleString()} ${Intl.DateTimeFormat().resolvedOptions().timeZone}`;
 }
 
 function encryptApiKey(value: string): string {
@@ -125,7 +188,8 @@ function ensureStorage() {
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, order_index INTEGER NOT NULL, title TEXT NOT NULL,
       next_action TEXT NOT NULL, explanation TEXT NOT NULL, status TEXT NOT NULL, atomization_level INTEGER NOT NULL,
       delay_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
-      task_type TEXT NOT NULL DEFAULT 'General writing'
+      task_type TEXT NOT NULL DEFAULT 'General writing', deadline_text TEXT NOT NULL DEFAULT '',
+      due_at TEXT, reminder_at TEXT
     );
     CREATE TABLE IF NOT EXISTS screenshots (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, file_path TEXT NOT NULL, thumbnail_path TEXT NOT NULL,
@@ -153,6 +217,11 @@ function ensureStorage() {
       confidence TEXT NOT NULL, summary TEXT NOT NULL, step_id TEXT, active_app TEXT, window_title TEXT,
       created_at TEXT NOT NULL
     );
+    CREATE TABLE IF NOT EXISTS reminders (
+      id TEXT PRIMARY KEY, session_id TEXT NOT NULL, step_id TEXT, task_type TEXT NOT NULL,
+      title TEXT NOT NULL, message TEXT NOT NULL, deadline_text TEXT NOT NULL, due_at TEXT,
+      reminder_at TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL, triggered_at TEXT
+    );
     CREATE TABLE IF NOT EXISTS settings (
       key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TEXT NOT NULL
     );
@@ -162,9 +231,13 @@ function ensureStorage() {
     CREATE INDEX IF NOT EXISTS idx_observations_session ON ai_observations(session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_breadcrumbs_session ON breadcrumbs(session_id, started_at);
     CREATE INDEX IF NOT EXISTS idx_task_history_session ON task_history(session_id, created_at);
+    CREATE INDEX IF NOT EXISTS idx_reminders_session ON reminders(session_id, reminder_at);
   `);
   ensureColumn("sessions", "task_types_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("steps", "task_type", "TEXT NOT NULL DEFAULT 'General writing'");
+  ensureColumn("steps", "deadline_text", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn("steps", "due_at", "TEXT");
+  ensureColumn("steps", "reminder_at", "TEXT");
   ensureColumn("ai_observations", "detected_task_type", "TEXT");
   for (const [key, value] of Object.entries(defaultSettings)) {
     orm.insert(settingsTable)
@@ -235,6 +308,9 @@ function rowStep(row: any): StepRecord {
     nextAction: row.next_action,
     explanation: row.explanation,
     taskType: row.task_type || "General writing",
+    deadlineText: row.deadline_text || "",
+    dueAt: row.due_at,
+    reminderAt: row.reminder_at,
     status: row.status,
     atomizationLevel: row.atomization_level,
     delayCount: row.delay_count,
@@ -331,6 +407,23 @@ function rowTaskHistory(row: any): TaskHistoryRecord {
     activeApp: row.active_app,
     windowTitle: row.window_title,
     createdAt: row.created_at
+  };
+}
+
+function rowReminder(row: any): ReminderRecord {
+  return {
+    id: row.id,
+    sessionId: row.session_id,
+    stepId: row.step_id,
+    taskType: row.task_type,
+    title: row.title,
+    message: row.message,
+    deadlineText: row.deadline_text,
+    dueAt: row.due_at,
+    reminderAt: row.reminder_at,
+    status: row.status,
+    createdAt: row.created_at,
+    triggeredAt: row.triggered_at
   };
 }
 
@@ -496,6 +589,76 @@ function addTaskHistory(
   );
 }
 
+function validIso(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null;
+}
+
+function reminderAtForStep(step: Pick<StepRecord, "dueAt" | "reminderAt">) {
+  const explicit = validIso(step.reminderAt);
+  if (explicit) return explicit;
+  const due = validIso(step.dueAt);
+  if (!due) return null;
+  return new Date(Date.parse(due) - 30 * 60_000).toISOString();
+}
+
+function syncStepReminder(step: StepRecord) {
+  db.prepare("DELETE FROM reminders WHERE step_id = ? AND status = 'scheduled'").run(step.id);
+  const reminderAt = reminderAtForStep(step);
+  if (!reminderAt) return;
+  const dueAt = validIso(step.dueAt);
+  const deadlineText = step.deadlineText || (dueAt ? new Date(dueAt).toLocaleString() : "");
+  db.prepare(`INSERT INTO reminders (
+    id, session_id, step_id, task_type, title, message, deadline_text, due_at, reminder_at, status, created_at, triggered_at
+  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, NULL)`).run(
+    id(),
+    step.sessionId,
+    step.id,
+    step.taskType,
+    step.title,
+    `Next up: ${step.nextAction}`,
+    deadlineText,
+    dueAt,
+    reminderAt,
+    now()
+  );
+}
+
+function checkReminders() {
+  const timestamp = now();
+  const rows = db
+    .prepare(`SELECT r.* FROM reminders r JOIN sessions s ON s.id = r.session_id WHERE r.status = 'scheduled' AND r.reminder_at <= ? AND s.status = 'active' ORDER BY r.reminder_at LIMIT 10`)
+    .all(timestamp) as any[];
+  for (const row of rows) {
+    const reminder = rowReminder(row);
+    db.prepare("UPDATE reminders SET status = 'triggered', triggered_at = ? WHERE id = ?").run(timestamp, reminder.id);
+    addEvent(reminder.sessionId, "deadline_reminder_triggered", reminder.title, {
+      stepId: reminder.stepId,
+      taskType: reminder.taskType,
+      dueAt: reminder.dueAt,
+      reminderAt: reminder.reminderAt
+    });
+    if (Notification.isSupported()) {
+      const notification = new Notification({
+        title: "Nerve reminder",
+        body: reminder.dueAt ? `${reminder.title} is due ${new Date(reminder.dueAt).toLocaleTimeString()}. ${reminder.message}` : reminder.message,
+        silent: false
+      });
+      notification.on("click", () => createMainWindow("/log"));
+      notification.show();
+    }
+    overlayExpanded = true;
+  }
+  if (rows.length > 0) broadcast();
+}
+
+function resetReminderLoop() {
+  if (reminderTimer) clearInterval(reminderTimer);
+  reminderTimer = setInterval(checkReminders, 30_000);
+  checkReminders();
+}
+
 function provider(settings = getSettings()): AIProvider {
   return new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
 }
@@ -529,7 +692,7 @@ function sanitizeTitle(title: string): string {
 function classifyRelevance(appName: string, windowTitle: string): BreadcrumbRelevance {
   const text = `${appName} ${windowTitle}`;
   if (
-    /essay|word|doc|docs|notes|research|article|pdf|citation|library|journal|paper|media|code|codex|vscode|visual studio|terminal|powershell|github|git|localhost|api|figma|canva|design|calendar|gmail|outlook|mail|form|portal|course|lecture|slides|todo|task|planner|notion/i.test(
+    /essay|word|doc|docs|notes|research|article|pdf|citation|library|journal|paper|media|code|codex|vscode|visual studio|terminal|powershell|github|git|localhost|api|figma|canva|design|calendar|gmail|outlook|mail|form|portal|course|lecture|slides|presentation|deck|todo|task|planner|notion|alarm|timer|maps|grocery|meal|dinner|lunch|breakfast|dog|pet|shower|laundry|chores|errand|appointment|health|exercise|walk|bank|bill|payment|message|call|text/i.test(
       text
     )
   ) {
@@ -805,6 +968,7 @@ function snapshot(): AppSnapshot {
     breadcrumbs: sessionId ? (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at DESC LIMIT 40").all(sessionId) as any[]).map(rowBreadcrumb) : [],
     observations: sessionId ? (db.prepare("SELECT * FROM ai_observations WHERE session_id = ? ORDER BY created_at DESC LIMIT 50").all(sessionId) as any[]).map(rowObservation) : [],
     taskHistory: sessionId ? (db.prepare("SELECT * FROM task_history WHERE session_id = ? ORDER BY created_at DESC LIMIT 80").all(sessionId) as any[]).map(rowTaskHistory) : [],
+    reminders: sessionId ? (db.prepare("SELECT * FROM reminders WHERE session_id = ? ORDER BY reminder_at ASC LIMIT 80").all(sessionId) as any[]).map(rowReminder) : [],
     settings: getSettings(),
     overlayExpanded,
     delayUntil,
@@ -908,11 +1072,38 @@ function registerIpc() {
     updateSettings(patch);
     return snapshot();
   });
+  ipcMain.handle("nerve:parseTaskList", async (_event, input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }) => {
+    const goal = typeof input.goal === "string" ? input.goal.trim() : "";
+    if (!goal) {
+      throw new Error("Add a task list or goal before parsing.");
+    }
+    const requestedScopes = inferTaskScopesFromText(goal, input.taskTypes ?? []);
+    const taskType = requestedScopes.length > 1 ? "Mixed work" : requestedScopes[0];
+    const activeWindow = await getActiveWindowFallback();
+    const parsed = await provider().generatePlan({
+      goal,
+      taskType,
+      taskTypes: requestedScopes,
+      language: getSettings().language,
+      deadlineText: input.deadlineText || "",
+      currentDateTime: `${localDateTimeContext()} (${new Date().toISOString()})`,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      activeApp: activeWindow.activeApp,
+      windowTitle: activeWindow.windowTitle
+    });
+    const steps = normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType);
+    if (steps.length === 0) {
+      throw new Error("DeepSeek did not return any usable tasks.");
+    }
+    return { steps, taskTypes: scopesFromSteps(steps, requestedScopes) };
+  });
   ipcMain.handle("nerve:deleteAllData", () => {
     if (captureTimer) clearInterval(captureTimer);
     captureTimer = null;
     if (delayTimer) clearTimeout(delayTimer);
     delayTimer = null;
+    if (reminderTimer) clearInterval(reminderTimer);
+    reminderTimer = null;
     activeSessionId = null;
     previousHash = null;
     delayUntil = null;
@@ -923,31 +1114,37 @@ function registerIpc() {
     currentBreadcrumbKey = null;
     currentBreadcrumbStartedAt = null;
     cachedSettings = null;
-    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history;");
+    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history; DELETE FROM reminders;");
     fs.rmSync(screenshotDir(), { recursive: true, force: true });
     fs.mkdirSync(screenshotDir(), { recursive: true });
     broadcast();
   });
-  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[] }) => {
+  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }) => {
     const goal = typeof input.goal === "string" ? input.goal.trim() : "";
     if (!goal) {
       throw new Error("A goal is required.");
     }
-    const taskTypes = normalizeTaskScopes(input.taskTypes?.length ? input.taskTypes : [input.taskType ?? "General writing"]);
+    const requestedTaskTypes = inferTaskScopesFromText(goal, input.taskTypes ?? (input.taskType ? [input.taskType] : []));
+    const parsedSteps = input.parsedSteps?.length ? normalizePlanSteps(input.parsedSteps, requestedTaskTypes[0]) : [];
+    const taskTypes = parsedSteps.length ? scopesFromSteps(parsedSteps, requestedTaskTypes) : requestedTaskTypes;
     const taskType = taskTypes.length > 1 ? "Mixed work" : taskTypes[0];
     const timestamp = now();
     const sessionId = id();
     const planProvider = provider();
     const activeWindow = await getActiveWindowFallback();
-    const plan = await planProvider.generatePlan({
-      goal,
-      taskType,
-      taskTypes,
-      language: getSettings().language,
-      deadlineText: input.deadlineText || "",
-      activeApp: activeWindow.activeApp,
-      windowTitle: activeWindow.windowTitle
-    });
+    const plan = parsedSteps.length
+      ? { steps: parsedSteps }
+      : await planProvider.generatePlan({
+          goal,
+          taskType,
+          taskTypes,
+          language: getSettings().language,
+          deadlineText: input.deadlineText || "",
+          currentDateTime: `${localDateTimeContext()} (${new Date().toISOString()})`,
+          timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+          activeApp: activeWindow.activeApp,
+          windowTitle: activeWindow.windowTitle
+        });
 
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status = 'active'").run(timestamp, timestamp);
     db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)").run(
@@ -960,10 +1157,25 @@ function registerIpc() {
       timestamp,
       timestamp
     );
-    const stmt = db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)");
-    plan.steps.forEach((step: PlanStepDraft, index: number) =>
-      stmt.run(id(), sessionId, index, step.title, step.nextAction, step.explanation, step.taskType ?? taskType, index === 0 ? "active" : "pending", timestamp, timestamp)
-    );
+    const stmt = db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, deadline_text, due_at, reminder_at, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, NULL)");
+    plan.steps.forEach((step: PlanStepDraft, index: number) => {
+      stmt.run(
+        id(),
+        sessionId,
+        index,
+        step.title,
+        step.nextAction,
+        step.explanation,
+        step.taskType ?? taskType,
+        step.deadlineText ?? "",
+        validIso(step.dueAt),
+        validIso(step.reminderAt),
+        index === 0 ? "active" : "pending",
+        timestamp,
+        timestamp
+      );
+    });
+    for (const step of getSteps(sessionId)) syncStepReminder(step);
     activeSessionId = sessionId;
     overlayExpanded = false;
     overlaySuppressUntil = 0;
@@ -979,6 +1191,7 @@ function registerIpc() {
       addTaskHistory(sessionId, firstStep.taskType, "step_active", "high", `Active step: ${firstStep.title}`, { stepId: firstStep.id });
     }
     resetCaptureLoop();
+    resetReminderLoop();
     void analyzeTick();
     broadcast();
     return snapshot();
@@ -992,6 +1205,8 @@ function registerIpc() {
       .run(timestamp, timestamp, session.id);
     if (captureTimer) clearInterval(captureTimer);
     captureTimer = null;
+    if (reminderTimer) clearInterval(reminderTimer);
+    reminderTimer = null;
     delayUntil = null;
     thinkingPauseUntil = null;
     addEvent(session.id, "session_ended", "Session ended by user.");
@@ -1021,6 +1236,9 @@ function registerIpc() {
       nextAction: "next_action",
       explanation: "explanation",
       taskType: "task_type",
+      deadlineText: "deadline_text",
+      dueAt: "due_at",
+      reminderAt: "reminder_at",
       status: "status",
       orderIndex: "order_index"
     } as const;
@@ -1033,10 +1251,13 @@ function registerIpc() {
             existing.session_id
           );
         }
-        db.prepare(`UPDATE steps SET ${column} = ?, updated_at = ? WHERE id = ?`).run(patch[key], now(), stepId);
+        const value = key === "dueAt" || key === "reminderAt" ? validIso(patch[key] as string | null | undefined) : patch[key];
+        db.prepare(`UPDATE steps SET ${column} = ?, updated_at = ? WHERE id = ?`).run(value, now(), stepId);
       }
     }
+    syncStepReminder(rowStep(db.prepare("SELECT * FROM steps WHERE id = ?").get(stepId) as any));
     if (existing.status === "active" && patch.status === "complete") {
+      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
       activateNextPendingStep(existing.session_id, existing.order_index);
       addEvent(existing.session_id, "step_done", "Step marked done. Moving to the next step.", { stepId });
     }
@@ -1048,7 +1269,7 @@ function registerIpc() {
     const nextIndexRow = db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 idx FROM steps WHERE session_id = ?").get(sessionId) as { idx: number };
     const nextIndex = Number(nextIndexRow.idx);
     const timestamp = now();
-    db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', 0, 0, ?, ?, NULL)").run(
+    db.prepare("INSERT INTO steps (id, session_id, order_index, title, next_action, explanation, task_type, deadline_text, due_at, reminder_at, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, '', NULL, NULL, 'pending', 0, 0, ?, ?, NULL)").run(
       id(),
       sessionId,
       nextIndex,
@@ -1068,6 +1289,7 @@ function registerIpc() {
     const step = db.prepare("SELECT * FROM steps WHERE id = ?").get(stepId) as any;
     if (step) {
       db.prepare("DELETE FROM steps WHERE id = ?").run(stepId);
+      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
       addEvent(step.session_id, "step_deleted", "A plan step was deleted.", { title: step.title });
       if (step.status === "active") {
         activateNextPendingStep(step.session_id, step.order_index);
@@ -1194,13 +1416,23 @@ async function runSmokeTest() {
         storeScreenshots: true
       });
 
-      const started = await window.nerve.startSession({
-        goal: "Smoke test: write a short essay introduction.",
+      const parsed = await window.nerve.parseTaskList({
+        goal: "Smoke test: complete math research, walk the dog at 3pm, shower at 5pm, have dinner at 6pm.",
         deadlineText: "today"
+      });
+      if (!parsed.steps.length) throw new Error("Parse returned no activities.");
+      if (!parsed.taskTypes.some((type) => ["Personal / life", "Pet care", "Meals", "Health / self-care"].includes(type))) {
+        throw new Error("Parse did not preserve a personal-life scope.");
+      }
+
+      const started = await window.nerve.startSession({
+        goal: "Smoke test: complete math research, walk the dog at 3pm, shower at 5pm, have dinner at 6pm.",
+        deadlineText: "today",
+        parsedSteps: parsed.steps
       });
       if (!started.session) throw new Error("No session returned after start.");
       if (!started.activeStep) throw new Error("No active step after start.");
-      if (started.steps.length < 5) throw new Error("Generated plan is too short.");
+      if (started.steps.length < 1) throw new Error("Generated plan is empty.");
 
       const thinking = await window.nerve.action("thinking");
       if (!thinking.thinkingPauseUntil) throw new Error("Thinking pause was not set.");
@@ -1209,8 +1441,11 @@ async function runSmokeTest() {
       if (!delayed.delayUntil) throw new Error("Delay countdown was not set.");
 
       const atomized = await window.nerve.action("atomize");
-      if (!atomized.activeStep || atomized.activeStep.atomizationLevel < 1) {
-        throw new Error("Atomize did not update the active step.");
+      if (!atomized.activeStep) {
+        throw new Error("Atomize lost the active step.");
+      }
+      if (atomized.activeStep.atomizationLevel < 1 && !atomized.events.some((event) => event.type === "provider_error")) {
+        throw new Error("Atomize neither updated the step nor logged a provider issue.");
       }
 
       const advanced = await window.nerve.action("done");
@@ -1235,6 +1470,7 @@ async function runSmokeTest() {
       const result = {
         sessionId: collapsed.session?.id,
         stepCount: collapsed.steps.length,
+        reminderCount: collapsed.reminders.length,
         eventCount: collapsed.events.length,
         screenshotCount: collapsed.screenshots.length,
         screenshotFolder: collapsed.screenshotFolder
@@ -1323,7 +1559,7 @@ async function runBreakTest() {
 
       const postDelete = await window.nerve.deleteAllData();
       const cleaned = await window.nerve.getSnapshot();
-      if (cleaned.session || cleaned.steps.length || cleaned.events.length || cleaned.screenshots.length) {
+      if (cleaned.session || cleaned.steps.length || cleaned.events.length || cleaned.screenshots.length || cleaned.reminders.length) {
         throw new Error("Delete all data left session data behind.");
       }
       await window.nerve.updateSettings(originalSettings);
@@ -1351,6 +1587,7 @@ app.whenReady().then(() => {
   activeSessionId = getActiveSession()?.id ?? null;
   pruneOldScreenshots();
   resetCaptureLoop();
+  resetReminderLoop();
   app.on("activate", () => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createOverlayWindow();

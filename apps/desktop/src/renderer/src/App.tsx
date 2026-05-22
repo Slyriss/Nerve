@@ -14,7 +14,7 @@ import {
   Settings,
   Trash2
 } from "lucide-react";
-import { taskTypes, type AppSnapshot, type NerveSettings, type StepRecord, type TaskType } from "@nerve/shared";
+import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type StepRecord, type TaskType } from "@nerve/shared";
 import "./styles.css";
 
 type View = "start" | "plan" | "log" | "settings";
@@ -29,7 +29,6 @@ type CopyKey =
   | "ready"
   | "goal"
   | "taskType"
-  | "optionalDeadline"
   | "mode"
   | "screenshotNotice"
   | "startSession"
@@ -85,7 +84,6 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     ready: "Ready when you are",
     goal: "Goal",
     taskType: "Task type",
-    optionalDeadline: "Optional deadline",
     mode: "Mode",
     screenshotNotice: "Nerve captures screenshots during a session and stores them locally on this device for demo/debugging. You can delete session data from Settings.",
     startSession: "Start Session",
@@ -140,7 +138,6 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     ready: "准备好时开始",
     goal: "目标",
     taskType: "任务类型",
-    optionalDeadline: "可选截止时间",
     mode: "模式",
     screenshotNotice: "Nerve 会在会话期间截图，并只保存在本设备用于演示/调试。你可以在设置中删除本地数据。",
     startSession: "开始会话",
@@ -224,6 +221,18 @@ function timeLeft(until: string | null) {
   const m = Math.floor(seconds / 60).toString();
   const s = (seconds % 60).toString().padStart(2, "0");
   return `${m}:${s}`;
+}
+
+function toDateTimeLocal(value?: string | null) {
+  if (!value) return "";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  const local = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return local.toISOString().slice(0, 16);
+}
+
+function fromDateTimeLocal(value: string) {
+  return value ? new Date(value).toISOString() : null;
 }
 
 function fileSrc(filePath: string) {
@@ -334,17 +343,43 @@ function SessionStart({
   settings: NerveSettings;
 }) {
   const [goal, setGoal] = useState("");
-  const [deadlineText, setDeadlineText] = useState("");
-  const [selectedTaskTypes, setSelectedTaskTypes] = useState<TaskType[]>(["General writing"]);
+  const [detectedTaskTypes, setDetectedTaskTypes] = useState<TaskType[]>([]);
+  const [parsedSteps, setParsedSteps] = useState<PlanStepDraft[]>([]);
+  const [parseBusy, setParseBusy] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const t = useCopy(settings.language);
+  function patchParsedStep(index: number, patch: Partial<PlanStepDraft>) {
+    setParsedSteps((steps) => steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)));
+  }
+  async function parse() {
+    if (!goal.trim()) return;
+    setParseBusy(true);
+    setError("");
+    try {
+      const parsed = await window.nerve.parseTaskList({
+        goal: goal.trim()
+      });
+      setParsedSteps(parsed.steps);
+      setDetectedTaskTypes(parsed.taskTypes);
+    } catch (parseError) {
+      setError(parseError instanceof Error ? parseError.message : "The task list could not be parsed.");
+    } finally {
+      setParseBusy(false);
+    }
+  }
   async function start() {
     if (!goal.trim()) return;
     setBusy(true);
     setError("");
     try {
-      setSnapshot(await window.nerve.startSession({ goal: goal.trim(), deadlineText: deadlineText.trim(), taskTypes: selectedTaskTypes }));
+      setSnapshot(
+        await window.nerve.startSession({
+          goal: goal.trim(),
+          taskTypes: detectedTaskTypes.length ? detectedTaskTypes : undefined,
+          parsedSteps: parsedSteps.length ? parsedSteps : undefined
+        })
+      );
     } catch (startError) {
       setError(startError instanceof Error ? startError.message : "The session could not start.");
     } finally {
@@ -359,38 +394,85 @@ function SessionStart({
           {t("goal")}
           <textarea
             value={goal}
-            onChange={(event) => setGoal(event.target.value)}
-            placeholder="Draft the intro, fix the failing test, process the form, study chapter 4..."
+            onChange={(event) => {
+              setGoal(event.target.value);
+              setParsedSteps([]);
+              setDetectedTaskTypes([]);
+            }}
+            placeholder="Finish math research, walk the dog at 3pm, shower at 5pm, dinner at 6pm..."
           />
         </label>
-        <label>
-          {t("taskType")}
-          <div className="scope-grid">
-            {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
-              <label className="scope-chip" key={type}>
-                <input
-                  type="checkbox"
-                  checked={selectedTaskTypes.includes(type)}
-                  onChange={(event) => {
-                    setSelectedTaskTypes((current) => {
-                      const next = event.target.checked ? [...current, type] : current.filter((item) => item !== type);
-                      return next.length ? next : [type];
-                    });
-                  }}
-                />
-                <span>{type}</span>
-              </label>
-            ))}
-          </div>
-        </label>
-        <label>
-          {t("optionalDeadline")}
-          <input value={deadlineText} onChange={(event) => setDeadlineText(event.target.value)} placeholder="4pm today" />
-        </label>
         <div className="fixed-row">
-          <span>{t("mode")}</span>
-          <strong>{selectedTaskTypes.length > 1 ? "Mixed work" : selectedTaskTypes[0]}</strong>
+          <span>Scope detection</span>
+          <strong>{detectedTaskTypes.length ? detectedTaskTypes.join(" + ") : "Automatic from your description"}</strong>
         </div>
+        <div className="button-row">
+          <button disabled={!goal.trim() || parseBusy || busy} onClick={parse}>
+            <ListChecks size={16} /> {parseBusy ? "Parsing..." : "Parse task list"}
+          </button>
+          {parsedSteps.length > 0 && <span className="subtle">{parsedSteps.length} activities parsed</span>}
+        </div>
+        {parsedSteps.length > 0 && (
+          <section className="parsed-timetable">
+            <div className="section-head">
+              <h3>Editable timetable</h3>
+              <button
+                onClick={() =>
+                  setParsedSteps((steps) => [
+                    ...steps,
+                    {
+                      title: "New activity",
+                      nextAction: "Do one small physical action.",
+                      explanation: "Keep it small and concrete.",
+                      taskType: detectedTaskTypes[0] ?? "Personal / life",
+                      deadlineText: "",
+                      dueAt: null,
+                      reminderAt: null
+                    }
+                  ])
+                }
+              >
+                <Plus size={16} /> Add activity
+              </button>
+            </div>
+            {parsedSteps.map((step, index) => (
+              <article className="timetable-row" key={`${step.title}-${index}`}>
+                <div className="time-cell">
+                  <span>{index + 1}</span>
+                  <input
+                    type="datetime-local"
+                    value={toDateTimeLocal(step.dueAt)}
+                    onChange={(event) => patchParsedStep(index, { dueAt: fromDateTimeLocal(event.currentTarget.value) })}
+                  />
+                  <input
+                    type="datetime-local"
+                    value={toDateTimeLocal(step.reminderAt)}
+                    onChange={(event) => patchParsedStep(index, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })}
+                  />
+                </div>
+                <div className="activity-fields">
+                  <input value={step.title} onChange={(event) => patchParsedStep(index, { title: event.currentTarget.value })} />
+                  <textarea value={step.nextAction} onChange={(event) => patchParsedStep(index, { nextAction: event.currentTarget.value })} />
+                  <input value={step.explanation || ""} onChange={(event) => patchParsedStep(index, { explanation: event.currentTarget.value })} />
+                  <input value={step.deadlineText || ""} placeholder="Deadline text" onChange={(event) => patchParsedStep(index, { deadlineText: event.currentTarget.value })} />
+                </div>
+                <div className="activity-controls">
+                  <select value={step.taskType || detectedTaskTypes[0] || "Personal / life"} onChange={(event) => patchParsedStep(index, { taskType: event.currentTarget.value as TaskType })}>
+                    {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
+                  <button
+                    title="Remove"
+                    onClick={() => setParsedSteps((steps) => steps.filter((_step, stepIndex) => stepIndex !== index))}
+                  >
+                    <Trash2 size={15} />
+                  </button>
+                </div>
+              </article>
+            ))}
+          </section>
+        )}
         <p className="notice">{t("screenshotNotice")}</p>
         {error && <p className="error-note">{error}</p>}
         <div className="button-row">
@@ -414,6 +496,7 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
   const total = snapshot.steps.length || 1;
   const t = useCopy(snapshot.settings.language);
   const latestState = snapshot.observations[0]?.userState;
+  const [sideView, setSideView] = useState<"step" | "timetable">("step");
   useNow(snapshot.delayUntil || snapshot.thinkingPauseUntil ? 1000 : 30_000);
   return (
     <div className={`overlay ${expanded ? "expanded" : "slim"}`} style={{ opacity }}>
@@ -441,18 +524,32 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
               <ChevronRight size={18} />
             </button>
           </div>
-          <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />
-          {snapshot.delayUntil && (
-            <div className="timer">
-              <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
-            </div>
+          <div className="side-toggle">
+            <button className={sideView === "step" ? "active" : ""} onClick={() => setSideView("step")}>
+              <Check size={14} /> Step
+            </button>
+            <button className={sideView === "timetable" ? "active" : ""} onClick={() => setSideView("timetable")}>
+              <Clock size={14} /> Time
+            </button>
+          </div>
+          {sideView === "step" ? (
+            <>
+              <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />
+              {snapshot.delayUntil && (
+                <div className="timer">
+                  <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
+                </div>
+              )}
+              {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
+                <div className="timer quiet">
+                  <Pause size={15} /> {t("stateThinking")} {timeLeft(snapshot.thinkingPauseUntil)}
+                </div>
+              )}
+              <BreadcrumbTrail compact breadcrumbs={snapshot.breadcrumbs.slice(0, 4).reverse()} />
+            </>
+          ) : (
+            <SideTimetable snapshot={snapshot} />
           )}
-          {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
-            <div className="timer quiet">
-              <Pause size={15} /> {t("stateThinking")} {timeLeft(snapshot.thinkingPauseUntil)}
-            </div>
-          )}
-          <BreadcrumbTrail compact breadcrumbs={snapshot.breadcrumbs.slice(0, 4).reverse()} />
           <div className="overlay-links">
             <button onClick={() => window.nerve.openMain("/plan")}>{t("viewPlan")}</button>
             <button onClick={() => window.nerve.openMain("/log")}>{t("viewLog")}</button>
@@ -461,6 +558,32 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
         </div>
       )}
     </div>
+  );
+}
+
+function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
+  const activeId = snapshot.activeStep?.id;
+  const now = Date.now();
+  return (
+    <section className="side-timetable">
+      {snapshot.steps.map((step) => {
+        const due = step.dueAt ? Date.parse(step.dueAt) : null;
+        const isPastDue = Boolean(due && due < now && step.status !== "complete");
+        return (
+          <article className={`${step.status} ${step.id === activeId ? "current" : ""} ${isPastDue ? "past-due" : ""}`} key={step.id}>
+            <div className="side-time">
+              <strong>{step.dueAt ? new Date(step.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--"}</strong>
+              {step.reminderAt && <span>{new Date(step.reminderAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
+            </div>
+            <div className="side-activity">
+              <span>{step.taskType}</span>
+              <strong>{step.title}</strong>
+              <p>{step.id === activeId ? "Current step" : step.status}</p>
+            </div>
+          </article>
+        );
+      })}
+    </section>
   );
 }
 
@@ -491,6 +614,7 @@ function StepCard({
       <p className="eyebrow">{t("currentStep")}</p>
       <span className="task-badge">{step.taskType}</span>
       <h2>{step.title}</h2>
+      {step.dueAt && <p className="deadline-line">Due {new Date(step.dueAt).toLocaleString()}</p>}
       <p className="action-text">{observation?.suggestedNextAction || step.nextAction}</p>
       <p className="muted">
         {thinking
@@ -548,6 +672,17 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
               <input defaultValue={step.title} onBlur={(event) => patch(step, { title: event.currentTarget.value })} />
               <textarea defaultValue={step.nextAction} onBlur={(event) => patch(step, { nextAction: event.currentTarget.value })} />
               <input defaultValue={step.explanation} onBlur={(event) => patch(step, { explanation: event.currentTarget.value })} />
+              <input placeholder="Deadline text" defaultValue={step.deadlineText} onBlur={(event) => patch(step, { deadlineText: event.currentTarget.value })} />
+              <div className="deadline-fields">
+                <label>
+                  Due
+                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                </label>
+                <label>
+                  Remind
+                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.reminderAt)} onBlur={(event) => patch(step, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                </label>
+              </div>
               <select value={step.taskType} onChange={(event) => patch(step, { taskType: event.currentTarget.value as TaskType })}>
                 {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
                   <option key={type} value={type}>{type}</option>
@@ -622,6 +757,19 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
         ))}
       </div>
       <div className="gallery">
+        {snapshot.reminders.length > 0 && (
+          <section className="reminder-list">
+            <h2>Deadline reminders</h2>
+            {snapshot.reminders.slice(0, 10).map((reminder) => (
+              <article className={reminder.status} key={reminder.id}>
+                <strong>{reminder.title}</strong>
+                <span>{reminder.status} · remind {new Date(reminder.reminderAt).toLocaleString()}</span>
+                {reminder.dueAt && <span>due {new Date(reminder.dueAt).toLocaleString()}</span>}
+                <p>{reminder.message}</p>
+              </article>
+            ))}
+          </section>
+        )}
         <h2>Screenshot gallery</h2>
         <div className="thumb-grid">
           {snapshot.screenshots.map((shot) => (

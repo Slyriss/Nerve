@@ -392,13 +392,9 @@ function App() {
   const isOverlay = location.hash.startsWith("#/overlay");
   const isBlocker = location.hash.startsWith("#/blocker");
 
-  if (!snapshot) return <div className="loading">Nerve</div>;
-  if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
-  if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
-  const t = useCopy(snapshot.settings.language);
-
-  const sessionOpen = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
-  const showHandoff = sessionOpen && view === "start";
+  // All hooks must be called unconditionally, before any early returns.
+  const t = useCopy(snapshot?.settings.language ?? "en");
+  const sessionOpen = snapshot?.session?.status === "active" || snapshot?.session?.status === "paused";
 
   // Reset to start screen when a session closes so stale plan/log data doesn't persist
   useEffect(() => {
@@ -406,6 +402,12 @@ function App() {
       setView("start");
     }
   }, [sessionOpen]);
+
+  if (!snapshot) return <div className="loading">Nerve</div>;
+  if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
+  if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
+
+  const showHandoff = sessionOpen && view === "start";
 
   return (
     <main className="app-shell">

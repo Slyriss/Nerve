@@ -12,8 +12,6 @@ import type {
   AIProvider,
   AnalyzeScreenInput,
   AnalyzeScreenOutput,
-  AtomizeStepInput,
-  AtomizeStepOutput,
   GeneratePlanInput,
   GeneratePlanOutput,
 } from "@nerve/shared";
@@ -31,9 +29,5 @@ export class AnalysisService {
 
   generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput> {
     return this.getProvider().generatePlan(input);
-  }
-
-  atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput> {
-    return this.getProvider().atomizeStep(input);
   }
 }

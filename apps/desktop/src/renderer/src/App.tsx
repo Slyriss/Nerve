@@ -84,6 +84,22 @@ type CopyKey =
   | "thinking"
   | "delay"
   | "thinkingHold"
+  | "routine"
+  | "repeatRoutine"
+  | "routineEvery"
+  | "routineNext"
+  | "waitingRoutineTitle"
+  | "waitingRoutineBody"
+  | "breakReminders"
+  | "breakReminderEvery"
+  | "breakDuration"
+  | "breakTime"
+  | "breakEndsIn"
+  | "getBackToWork"
+  | "nextBreak"
+  | "pastDeadlineTitle"
+  | "pastDeadlineBody"
+  | "keepPastDeadline"
   | "nextPhysical"
   | "completePrompt"
   | "markDone"
@@ -189,6 +205,22 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     thinking: "I’m thinking",
     delay: "Give me 5 more minutes",
     thinkingHold: "Got it. I’ll hold this step while you think.",
+    routine: "Routine",
+    repeatRoutine: "Repeat routine task",
+    routineEvery: "Repeat every",
+    routineNext: "Next routine",
+    waitingRoutineTitle: "Waiting for the next scheduled routine.",
+    waitingRoutineBody: "I’ll bring it back to priority 1 when it is time.",
+    breakReminders: "Break reminders",
+    breakReminderEvery: "Remind every",
+    breakDuration: "Break length",
+    breakTime: "Break time",
+    breakEndsIn: "Break ends in",
+    getBackToWork: "Get back to work",
+    nextBreak: "Next break",
+    pastDeadlineTitle: "Past deadline",
+    pastDeadlineBody: "This time has already passed. Confirm it if this is the deadline you meant to keep.",
+    keepPastDeadline: "Keep this deadline",
     nextPhysical: "No rush. When you’re ready, the next physical action is:",
     completePrompt: "This step looks complete. Mark it done?",
     markDone: "Mark Done",
@@ -293,6 +325,22 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     thinking: "我在思考",
     delay: "再给我 5 分钟",
     thinkingHold: "收到。我会先帮你保留这一步。",
+    routine: "例行任务",
+    repeatRoutine: "重复例行任务",
+    routineEvery: "重复间隔",
+    routineNext: "下次例行任务",
+    waitingRoutineTitle: "正在等待下一次例行任务。",
+    waitingRoutineBody: "到时间时，我会把它提到优先级 1。",
+    breakReminders: "休息提醒",
+    breakReminderEvery: "提醒间隔",
+    breakDuration: "休息时长",
+    breakTime: "休息时间",
+    breakEndsIn: "休息剩余",
+    getBackToWork: "回到工作",
+    nextBreak: "下次休息",
+    pastDeadlineTitle: "截止时间已过",
+    pastDeadlineBody: "这个时间已经过去。如果这是你想保留的截止时间，请确认。",
+    keepPastDeadline: "保留这个截止时间",
     nextPhysical: "不急。准备好时，下一步身体动作是：",
     completePrompt: "这一步看起来已完成。要标记完成吗？",
     markDone: "标记完成",
@@ -424,12 +472,46 @@ function fromDateTimeLocal(value: string) {
   return value ? new Date(value).toISOString() : null;
 }
 
-type Schedulable = { reminderAt?: string | null; dueAt?: string | null };
+function addMinutesIso(value: string | null | undefined, minutes: number) {
+  const base = value ? Date.parse(value) : Date.now();
+  const start = Number.isFinite(base) ? base : Date.now();
+  return new Date(start + minutes * 60_000).toISOString();
+}
+
+function isPast(value?: string | null) {
+  if (!value) return false;
+  const parsed = Date.parse(value);
+  return Number.isFinite(parsed) && parsed < Date.now();
+}
+
+function hasPastDeadline(step: Schedulable) {
+  return isPast(step.dueAt) || isPast(step.reminderAt) || isPast(step.routineNextAt);
+}
+
+function syncedRoutinePatch(step: PlanStepDraft, minutes: number | null): Partial<PlanStepDraft> {
+  if (!minutes) {
+    return { routineIntervalMinutes: null, routineNextAt: null };
+  }
+  const anchor = step.reminderAt || step.routineNextAt || step.dueAt || null;
+  const routineNextAt = addMinutesIso(anchor, minutes);
+  return {
+    routineIntervalMinutes: minutes,
+    routineNextAt,
+    reminderAt: step.reminderAt || routineNextAt
+  };
+}
+
+type Schedulable = { reminderAt?: string | null; dueAt?: string | null; routineNextAt?: string | null };
 
 function scheduleTime(step: Schedulable) {
+  const routine = step.routineNextAt ? Date.parse(step.routineNextAt) : Number.POSITIVE_INFINITY;
   const reminder = step.reminderAt ? Date.parse(step.reminderAt) : Number.POSITIVE_INFINITY;
   const due = step.dueAt ? Date.parse(step.dueAt) : Number.POSITIVE_INFINITY;
-  return Math.min(Number.isFinite(reminder) ? reminder : Number.POSITIVE_INFINITY, Number.isFinite(due) ? due : Number.POSITIVE_INFINITY);
+  return Math.min(
+    Number.isFinite(routine) ? routine : Number.POSITIVE_INFINITY,
+    Number.isFinite(reminder) ? reminder : Number.POSITIVE_INFINITY,
+    Number.isFinite(due) ? due : Number.POSITIVE_INFINITY
+  );
 }
 
 function sortBySchedule<T extends Schedulable>(steps: T[]) {
@@ -469,7 +551,7 @@ function completionStats(steps: StepRecord[]) {
 
 function nextScheduledLabel(steps: Schedulable[]) {
   const now = Date.now();
-  const next = sortBySchedule(steps).find((step) => scheduleTime(step) >= now);
+  const next = sortBySchedule(steps).find((step) => Number.isFinite(scheduleTime(step)) && scheduleTime(step) >= now);
   if (!next) return "No deadline";
   return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
@@ -721,6 +803,8 @@ function SessionStart({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const t = useCopy(settings.language);
+  useNow(30_000);
+  const unresolvedPastDeadlineCount = parsedSteps.filter((step) => hasPastDeadline(step) && !step.pastDeadlineConfirmed).length;
   function patchParsedStep(index: number, patch: Partial<PlanStepDraft>) {
     setParsedSteps((steps) => steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)));
   }
@@ -800,10 +884,15 @@ function SessionStart({
             </button>
             {parsedSteps.length > 0 && <span className="subtle">{parsedSteps.length} activities parsed</span>}
           </div>
-          <button className="primary" disabled={!goal.trim() || busy} onClick={start}>
+          <button className="primary" disabled={!goal.trim() || busy || unresolvedPastDeadlineCount > 0} onClick={start}>
             <Check size={16} /> {t("startSession")}
           </button>
         </div>
+        {unresolvedPastDeadlineCount > 0 && (
+          <p className="deadline-warning">
+            <AlertTriangle size={15} /> {unresolvedPastDeadlineCount} {t("pastDeadlineTitle").toLowerCase()}
+          </p>
+        )}
         {parsedSteps.length > 0 && (
           <section className="parsed-timetable">
             <div className="section-head">
@@ -819,7 +908,9 @@ function SessionStart({
                       taskType: detectedTaskTypes[0] ?? "Personal / life",
                       deadlineText: "",
                       dueAt: null,
-                      reminderAt: null
+                      reminderAt: null,
+                      routineIntervalMinutes: null,
+                      routineNextAt: null
                     }
                   ])
                 }
@@ -827,8 +918,10 @@ function SessionStart({
                 <Plus size={16} /> Add activity
               </button>
             </div>
-            {parsedSteps.map((step, index) => (
-              <article className="timetable-row" key={`${step.title}-${index}`}>
+            {parsedSteps.map((step, index) => {
+              const pastDeadline = hasPastDeadline(step);
+              return (
+              <article className={`timetable-row ${pastDeadline ? "past-due" : ""}`} key={`${step.title}-${index}`}>
                 <div className="time-cell">
                   <span>{index + 1}</span>
                   <label className="time-field">
@@ -836,7 +929,14 @@ function SessionStart({
                     <input
                       type="datetime-local"
                       value={toDateTimeLocal(step.reminderAt)}
-                      onChange={(event) => patchParsedStep(index, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })}
+                      onChange={(event) => {
+                        const reminderAt = fromDateTimeLocal(event.currentTarget.value);
+                        patchParsedStep(index, {
+                          reminderAt,
+                          routineNextAt: step.routineIntervalMinutes && reminderAt ? addMinutesIso(reminderAt, step.routineIntervalMinutes) : step.routineNextAt,
+                          pastDeadlineConfirmed: false
+                        });
+                      }}
                     />
                   </label>
                   <label className="time-field">
@@ -844,7 +944,28 @@ function SessionStart({
                     <input
                       type="datetime-local"
                       value={toDateTimeLocal(step.dueAt)}
-                      onChange={(event) => patchParsedStep(index, { dueAt: fromDateTimeLocal(event.currentTarget.value) })}
+                      onChange={(event) => {
+                        const dueAt = fromDateTimeLocal(event.currentTarget.value);
+                        patchParsedStep(index, {
+                          dueAt,
+                          ...(step.routineIntervalMinutes && !step.routineNextAt && dueAt ? { routineNextAt: addMinutesIso(dueAt, step.routineIntervalMinutes), reminderAt: dueAt } : {}),
+                          pastDeadlineConfirmed: false
+                        });
+                      }}
+                    />
+                  </label>
+                  <label className="time-field">
+                    {t("routineNext")}
+                    <input
+                      type="datetime-local"
+                      value={toDateTimeLocal(step.routineNextAt)}
+                      onChange={(event) => {
+                        const routineNextAt = fromDateTimeLocal(event.currentTarget.value);
+                        patchParsedStep(index, {
+                          routineNextAt,
+                          pastDeadlineConfirmed: false
+                        });
+                      }}
                     />
                   </label>
                 </div>
@@ -859,6 +980,27 @@ function SessionStart({
                       <option key={type} value={type}>{type}</option>
                     ))}
                   </select>
+                  <label className="time-field">
+                    {t("routineEvery")}
+                    <input
+                      type="number"
+                      min="0"
+                      step="5"
+                      value={step.routineIntervalMinutes ?? ""}
+                      onChange={(event) => patchParsedStep(index, { ...syncedRoutinePatch(step, event.currentTarget.value ? Number(event.currentTarget.value) : null), pastDeadlineConfirmed: false })}
+                      placeholder="minutes"
+                    />
+                  </label>
+                  {pastDeadline && !step.pastDeadlineConfirmed && (
+                    <div className="deadline-warning">
+                      <AlertTriangle size={15} />
+                      <div>
+                        <strong>{t("pastDeadlineTitle")}</strong>
+                        <p>{t("pastDeadlineBody")}</p>
+                      </div>
+                      <button onClick={() => patchParsedStep(index, { pastDeadlineConfirmed: true })}>{t("keepPastDeadline")}</button>
+                    </div>
+                  )}
                   <button
                     title="Remove"
                     onClick={() => setParsedSteps((steps) => steps.filter((_step, stepIndex) => stepIndex !== index))}
@@ -867,7 +1009,8 @@ function SessionStart({
                   </button>
                 </div>
               </article>
-            ))}
+              );
+            })}
           </section>
         )}
         <p className="notice">{t("screenshotNotice")}</p>
@@ -917,7 +1060,7 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
   const latestState = snapshot.observations[0]?.userState;
   const [sideView, setSideView] = useState<"step" | "timetable">("step");
   const [confirmEnd, setConfirmEnd] = useState(false);
-  useNow(snapshot.delayUntil || snapshot.thinkingPauseUntil ? 1000 : 30_000);
+  useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt ? 1000 : 30_000);
   const prevAlertRef = useRef<typeof snapshot.bannedSiteAlert>(null);
   useEffect(() => {
     if (snapshot.settings.soundEnabled && snapshot.bannedSiteAlert && !prevAlertRef.current) {
@@ -972,14 +1115,14 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
             {sideView === "step" ? (
               <>
                 {snapshot.bannedSiteAlert ? <BannedSiteCard snapshot={snapshot} /> : <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />}
-                {snapshot.delayUntil && (
-                  <div className="timer">
-                    <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
-                  </div>
-                )}
                 {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
                   <div className="timer quiet">
                     <Pause size={15} /> {t("stateThinking")} {timeLeft(snapshot.thinkingPauseUntil)}
+                  </div>
+                )}
+                {snapshot.breakEndsAt && Date.parse(snapshot.breakEndsAt) > Date.now() && (
+                  <div className="timer quiet">
+                    <Clock size={15} /> {t("breakEndsIn")} {timeLeft(snapshot.breakEndsAt)}
                   </div>
                 )}
               </>
@@ -1076,19 +1219,18 @@ function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
         <div className="side-empty">No same-day activity scheduled.</div>
       )}
       {steps.map((step) => {
-        const due = step.dueAt ? Date.parse(step.dueAt) : null;
-        const isPastDue = Boolean(due && due < now && step.status !== "complete");
+        const isPastDue = hasPastDeadline(step) && step.status !== "complete";
         return (
           <article className={`${step.status} ${step.id === activeId ? "current" : ""} ${isPastDue ? "past-due" : ""}`} key={step.id}>
             <div className="side-time">
               <span>Remind</span>
-              <strong>{timeLabel(step.reminderAt)}</strong>
+              <strong>{timeLabel(step.routineNextAt || step.reminderAt)}</strong>
               <span>Due {timeLabel(step.dueAt)}</span>
             </div>
             <div className="side-activity">
               <span>{step.taskType}</span>
               <strong>{step.title}</strong>
-              <p>{step.id === activeId ? "Current step" : step.status}</p>
+              <p>{step.routineIntervalMinutes ? `Routine · every ${step.routineIntervalMinutes}m` : step.id === activeId ? "Current step" : step.status}</p>
             </div>
           </article>
         );
@@ -1153,8 +1295,13 @@ function StepCard({
   compact?: boolean;
 }) {
   const step = snapshot.activeStep;
-  const observation = snapshot.observations[0];
+  const latestObservation = snapshot.observations[0];
+  const observation =
+    step && latestObservation?.stepId === step.id
+      ? latestObservation
+      : undefined;
   const thinking = snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now();
+  const breakActive = snapshot.breakEndsAt && Date.parse(snapshot.breakEndsAt) > Date.now();
   const t = useCopy(snapshot.settings.language);
   const paused = snapshot.session?.status === "paused";
   const { completed, percent, total } = completionStats(snapshot.steps);
@@ -1164,8 +1311,43 @@ function StepCard({
   if (!snapshot.session) {
     return <div className="step-card"><p>{t("noSession")}</p></div>;
   }
-  if (snapshot.session.status === "completed" || !step) {
+  if (breakActive) {
+    return (
+      <section className={`step-card ${compact ? "compact" : ""}`}>
+        <div className="step-card-head">
+          <div>
+            <p className="eyebrow">{t("breakTime")}</p>
+            <h2>{t("breakEndsIn")} {timeLeft(snapshot.breakEndsAt)}</h2>
+          </div>
+          <span className="task-badge">{t("breakReminders")}</span>
+        </div>
+        <p className="muted">{step ? `${t("getBackToWork")}: ${step.title}` : t("waitingRoutineBody")}</p>
+        <button className="primary" onClick={() => action("endBreak")}>
+          <Play size={16} /> {t("getBackToWork")}
+        </button>
+      </section>
+    );
+  }
+  if (snapshot.session.status === "completed") {
     return <div className="step-card"><h2>{t("sessionComplete")}</h2><p className="muted">{t("sessionComplete")}</p></div>;
+  }
+  if (!step) {
+    return (
+      <section className={`step-card ${compact ? "compact" : ""}`}>
+        <div className="step-card-head">
+          <div>
+            <p className="eyebrow">{t("routine")}</p>
+            <h2>{t("waitingRoutineTitle")}</h2>
+          </div>
+        </div>
+        <p className="muted">{t("waitingRoutineBody")}</p>
+        {snapshot.steps.some((candidate) => candidate.routineNextAt) && (
+          <div className="step-meta">
+            <span>{t("routineNext")} {nextScheduledLabel(snapshot.steps)}</span>
+          </div>
+        )}
+      </section>
+    );
   }
   if (paused) {
     return (
@@ -1185,7 +1367,7 @@ function StepCard({
     );
   }
   return (
-    <section className={`step-card ${compact ? "compact" : ""}`}>
+    <section className={`step-card ${compact ? "compact" : ""} ${hasPastDeadline(step) ? "past-due" : ""}`}>
       <div className="step-card-head">
         <div>
           <p className="eyebrow">{t("currentStep")}</p>
@@ -1198,7 +1380,10 @@ function StepCard({
       </div>
       <div className="step-meta">
         <span>{completed}/{total} complete</span>
-        {step.dueAt && <span>Due {new Date(step.dueAt).toLocaleString()}</span>}
+        {step.reminderAt && <span className={isPast(step.reminderAt) ? "past-due-chip" : ""}>Remind {new Date(step.reminderAt).toLocaleString()}</span>}
+        {step.dueAt && <span className={isPast(step.dueAt) ? "past-due-chip" : ""}>Due {new Date(step.dueAt).toLocaleString()}</span>}
+        {step.routineIntervalMinutes && <span>{t("routineEvery")} {step.routineIntervalMinutes} min</span>}
+        {step.routineNextAt && <span className={isPast(step.routineNextAt) ? "past-due-chip" : ""}>{t("routineNext")} {new Date(step.routineNextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         {step.delayCount > 0 && <span>{step.delayCount} delays</span>}
       </div>
       <p className="action-text">{observation?.suggestedNextAction || step.nextAction}</p>
@@ -1219,7 +1404,7 @@ function StepCard({
           <Check size={16} /> {t("done")}
         </button>
         <button onClick={() => action("thinking")}>
-          <Pause size={16} /> {t("thinking")}
+          {thinking ? <Play size={16} /> : <Pause size={16} />} {thinking ? t("cancelThinking") : t("thinking")}
         </button>
         <button onClick={() => action("delay")}>
           <Clock size={16} /> {t("delay")}
@@ -1529,21 +1714,56 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
           </div>
         </div>
         {snapshot.steps.map((step) => (
-          <article className={`plan-step ${step.status}`} key={step.id}>
+          <article className={`plan-step ${step.status} ${hasPastDeadline(step) && step.status !== "complete" ? "past-due" : ""}`} key={step.id}>
             <div className="step-index">{step.orderIndex + 1}</div>
             <div className="step-fields">
-              <input defaultValue={step.title} onBlur={(event) => patch(step, { title: event.currentTarget.value })} />
-              <textarea defaultValue={step.nextAction} onBlur={(event) => patch(step, { nextAction: event.currentTarget.value })} />
+              <input key={`title-${step.id}-${step.title}`} defaultValue={step.title} onBlur={(event) => patch(step, { title: event.currentTarget.value })} />
+              <textarea key={`action-${step.id}-${step.nextAction}`} defaultValue={step.nextAction} onBlur={(event) => patch(step, { nextAction: event.currentTarget.value })} />
               <div className="deadline-fields">
                 <label>
                   Remind
-                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.reminderAt)} onBlur={(event) => patch(step, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                  <input
+                    key={`remind-${step.id}-${step.reminderAt ?? ""}`}
+                    type="datetime-local"
+                    defaultValue={toDateTimeLocal(step.reminderAt)}
+                    onBlur={(event) => {
+                      const reminderAt = fromDateTimeLocal(event.currentTarget.value);
+                      patch(step, {
+                        reminderAt,
+                        ...(step.routineIntervalMinutes && reminderAt ? { routineNextAt: addMinutesIso(reminderAt, step.routineIntervalMinutes) } : {})
+                      });
+                    }}
+                  />
                 </label>
                 <label>
                   Due
-                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                  <input key={`due-${step.id}-${step.dueAt ?? ""}`} type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                </label>
+                <label>
+                  {t("routineEvery")}
+                  <input key={`routine-interval-${step.id}-${step.routineIntervalMinutes ?? ""}`} type="number" min="0" step="5" defaultValue={step.routineIntervalMinutes ?? ""} onBlur={(event) => patch(step, { routineIntervalMinutes: event.currentTarget.value ? Number(event.currentTarget.value) : null })} />
+                </label>
+                <label>
+                  {t("routineNext")}
+                  <input
+                    key={`routine-next-${step.id}-${step.routineNextAt ?? ""}`}
+                    type="datetime-local"
+                    defaultValue={toDateTimeLocal(step.routineNextAt)}
+                    onBlur={(event) => {
+                      const routineNextAt = fromDateTimeLocal(event.currentTarget.value);
+                      patch(step, {
+                        routineNextAt,
+                        ...(step.routineIntervalMinutes ? { reminderAt: routineNextAt } : {})
+                      });
+                    }}
+                  />
                 </label>
               </div>
+              {hasPastDeadline(step) && step.status !== "complete" && (
+                <p className="deadline-warning">
+                  <AlertTriangle size={15} /> {t("pastDeadlineTitle")}
+                </p>
+              )}
               <span>{step.status}</span>
             </div>
             <div className="step-controls">
@@ -1604,9 +1824,9 @@ type TlEventClass = "tl-start" | "tl-end" | "tl-done" | "tl-warn" | "tl-error" |
 function eventClass(type: string): TlEventClass {
   if (["session_started", "session_resumed"].includes(type)) return "tl-start";
   if (["session_ended", "session_completed"].includes(type)) return "tl-end";
-  if (["session_paused", "thinking_clicked"].includes(type)) return "tl-pause";
+  if (["session_paused", "thinking_clicked", "thinking_cancelled", "break_started", "break_finished", "break_cancelled"].includes(type)) return "tl-pause";
   if (["step_done", "guidance_done"].includes(type)) return "tl-done";
-  if (["banned_site_detected", "deadline_reminder_triggered"].includes(type)) return "tl-warn";
+  if (["banned_site_detected", "deadline_reminder_triggered", "routine_promoted"].includes(type)) return "tl-warn";
   if (type === "provider_error") return "tl-error";
   if (type === "step_shown") return "tl-nudge";
   return "tl-info";
@@ -1624,15 +1844,20 @@ function eventLabel(type: string, meta: Record<string, unknown>, stepMap: Map<st
       return title ? `Completed: ${title}` : "Step completed";
     }
     case "guidance_done": return "Sub-step done";
-    case "step_atomized": return "Step broken into smaller actions";
     case "step_added": return "Step added to plan";
     case "step_deleted": return meta.title ? `Removed: ${meta.title as string}` : "Step removed";
+    case "step_reprioritized": return "Priority changed";
     case "banned_site_detected": return `Flagged: ${meta.rule || "banned site"}`;
     case "step_shown": return "Nudge sent";
     case "thinking_clicked": return "Thinking pause";
-    case "delay_expired": return "5-minute delay ended";
+    case "thinking_cancelled": return "Thinking pause ended";
+    case "routine_promoted": return "Routine moved to priority 1";
+    case "routine_repeated": return "Routine scheduled again";
+    case "break_started": return "Break started";
+    case "break_finished": return "Back-to-work reminder";
+    case "break_cancelled": return "Break ended";
     case "replan": return "Plan regenerated";
-    case "deadline_reminder_triggered": return `Deadline reminder: ${meta.title || ""}`;
+    case "deadline_reminder_triggered": return meta.routine ? `Routine reminder: ${meta.title || ""}` : `Deadline reminder: ${meta.title || ""}`;
     case "provider_error": return "AI analysis failed";
     default: return type.replaceAll("_", " ");
   }
@@ -2151,6 +2376,25 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
             <Select label={t("thinkingPause")} value={settings.thinkingPauseMinutes} onChange={(value) => save({ thinkingPauseMinutes: Number(value) as NerveSettings["thinkingPauseMinutes"] })} options={[3, 5, 10]} suffix="minutes" />
             <Select label={t("panelOpacity")} value={settings.panelOpacity} onChange={(value) => save({ panelOpacity: Number(value) as NerveSettings["panelOpacity"] })} options={[0.5]} suffix="" />
           </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <Clock size={17} />
+            <h3>{t("breakReminders")}</h3>
+          </div>
+          <label className="switch-row">
+            <span>{t("breakReminders")}</span>
+            <input
+              type="checkbox"
+              checked={settings.breakRemindersEnabled}
+              onChange={(event) => save({ breakRemindersEnabled: event.target.checked })}
+            />
+          </label>
+          <div className="settings-grid">
+            <Select label={t("breakReminderEvery")} value={settings.breakIntervalMinutes} onChange={(value) => save({ breakIntervalMinutes: Number(value) as NerveSettings["breakIntervalMinutes"] })} options={[15, 25, 30, 45, 60, 90]} suffix="minutes" />
+            <Select label={t("breakDuration")} value={settings.breakDurationMinutes} onChange={(value) => save({ breakDurationMinutes: Number(value) as NerveSettings["breakDurationMinutes"] })} options={[5, 10, 15, 20, 30]} suffix="minutes" />
+          </div>
+          {snapshot.breakReminderAt && <p className="subtle">{t("nextBreak")} {new Date(snapshot.breakReminderAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</p>}
         </section>
         <section className="settings-section">
           <div className="settings-section-head">

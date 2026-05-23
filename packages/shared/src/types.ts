@@ -72,6 +72,9 @@ export interface PlanStepDraft {
   deadlineText?: string;
   dueAt?: string | null;
   reminderAt?: string | null;
+  routineIntervalMinutes?: number | null;
+  routineNextAt?: string | null;
+  pastDeadlineConfirmed?: boolean;
 }
 
 export interface GeneratePlanInput {
@@ -127,30 +130,13 @@ export interface AnalyzeScreenOutput {
   urgency: Urgency;
   breadcrumbRelevance: BreadcrumbRelevance;
   detectedTaskType?: TaskType;
-}
-
-export interface AtomizeStepInput {
-  goal: string;
-  taskType: TaskType;
-  sessionTaskTypes?: TaskType[];
-  language?: DisplayLanguage;
-  currentStepTitle: string;
-  currentNextAction: string;
-  atomizationLevel: number;
-  delayCount: number;
-}
-
-export interface AtomizeStepOutput {
-  nextAction: string;
-  explanation: string;
-  atomizationLevel: number;
+  stepId?: string | null;
 }
 
 export interface AIProvider {
   readonly name: AIProviderName;
   generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput>;
   analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput>;
-  atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput>;
 }
 
 export interface SessionRecord {
@@ -195,6 +181,8 @@ export interface StepRecord {
   deadlineText: string;
   dueAt?: string | null;
   reminderAt?: string | null;
+  routineIntervalMinutes?: number | null;
+  routineNextAt?: string | null;
   status: StepStatus;
   atomizationLevel: number;
   delayCount: number;
@@ -212,6 +200,8 @@ export interface ActivityRecord {
   deadlineText: string;
   dueAt?: string | null;
   reminderAt?: string | null;
+  routineIntervalMinutes?: number | null;
+  routineNextAt?: string | null;
   status: StepStatus;
   createdAt: string;
   updatedAt: string;
@@ -387,6 +377,8 @@ export interface AppSnapshot {
   overlayExpanded: boolean;
   delayUntil: string | null;
   thinkingPauseUntil: string | null;
+  breakReminderAt: string | null;
+  breakEndsAt: string | null;
   bannedSiteAlert: BannedSiteAlert | null;
   bannedSiteStrikeCount: number;
   screenshotFolder: string;

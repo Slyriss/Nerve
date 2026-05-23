@@ -1,4 +1,4 @@
-import type { AnalyzeScreenInput, AtomizeStepInput, GeneratePlanInput } from "./types.js";
+import type { AnalyzeScreenInput, GeneratePlanInput } from "./types.js";
 
 export const toneRules = [
   "Calm",
@@ -39,6 +39,10 @@ For every step with a deadline, include:
 - dueAt: an ISO 8601 timestamp with timezone offset when you can infer it from the current date/time.
 - reminderAt: an ISO 8601 timestamp, usually 30 minutes before dueAt for short-term deadlines. Use earlier reminders for larger work when helpful.
 If no deadline exists for a step, use deadlineText "", dueAt null, reminderAt null.
+For repeated or routine tasks, such as "check specimens every 30 minutes" or "take medication every 4 hours", keep one row for that activity and include:
+- routineIntervalMinutes: the repeat interval in whole minutes.
+- routineNextAt: the next ISO 8601 timestamp when the app should prompt for the routine, or null if it cannot be inferred.
+If the step does not repeat, use routineIntervalMinutes null and routineNextAt null.
 If the session has multiple scopes, create a blended plan with clear handoffs between scopes. Do not force every scope into every plan; use only scopes that fit the goal.
 Use the user's domain:
 - Writing: drafting, revising, outlining, submitting.
@@ -80,7 +84,7 @@ Distinct support guidance:
 - Mixed work: preserve context as the user switches scopes; keep the current physical action tied to the active step.
 
 Return only JSON:
-{"steps":[{"title":"...","nextAction":"...","explanation":"...","taskType":"Coding","deadlineText":"today 3pm","dueAt":"2026-05-23T15:00:00+08:00","reminderAt":"2026-05-23T14:30:00+08:00"}]}
+{"steps":[{"title":"...","nextAction":"...","explanation":"...","taskType":"Coding","deadlineText":"today 3pm","dueAt":"2026-05-23T15:00:00+08:00","reminderAt":"2026-05-23T14:30:00+08:00","routineIntervalMinutes":null,"routineNextAt":null}]}
 
 Goal: ${input.goal}
 Primary task type: ${input.taskType}
@@ -143,28 +147,4 @@ Atomization level: ${input.atomizationLevel}
 Thinking pause active: ${input.thinkingPauseActive}
 Recent breadcrumbs: ${JSON.stringify(input.recentBreadcrumbs)}
 Screen summary: ${input.screenSummary || "none"}`;
-}
-
-export function atomizePrompt(input: AtomizeStepInput): string {
-  const scopes = input.sessionTaskTypes?.length ? input.sessionTaskTypes : [input.taskType];
-  return `You are Nerve, a read-only ADHD task co-pilot.
-
-Tone rules:
-- ${toneRules}
-
-Response language: ${responseLanguage(input.language)}
-
-Make the current action smaller. The smaller action must be physical and immediately doable.
-Do not add decisions. Do not ask the user to plan. Avoid abstract actions.
-
-Return only JSON:
-{"nextAction":"...","explanation":"...","atomizationLevel":number}
-
-Goal: ${input.goal}
-Current step task type: ${input.taskType}
-Session scopes: ${scopes.join(", ")}
-Step title: ${input.currentStepTitle}
-Current action: ${input.currentNextAction}
-Current atomization level: ${input.atomizationLevel}
-Delay count: ${input.delayCount}`;
 }

@@ -8,6 +8,7 @@ import { completionStats, nextScheduledLabel, stateLabel } from "./lib/utils";
 import type { View } from "./lib/types";
 import { ErrorBoundary } from "./components/ErrorBoundary";
 import { BlockerScreen } from "./components/BlockerScreen";
+import { CatScreen } from "./components/CatScreen";
 import { Overlay } from "./components/Overlay";
 import { SessionCommandBar } from "./components/SessionCommandBar";
 import { ActiveSessionHandoff } from "./components/ActiveSessionHandoff";
@@ -36,6 +37,7 @@ function App() {
   const [prefillGoal, setPrefillGoal] = useState<string>("");
   const isOverlay = location.hash.startsWith("#/overlay");
   const isBlocker = location.hash.startsWith("#/blocker");
+  const isCatScreen = location.hash.startsWith("#/cat");
 
   const t = useCopy(snapshot?.settings.language ?? "en");
   const sessionOpen = snapshot?.session?.status === "active" || snapshot?.session?.status === "paused";
@@ -49,6 +51,7 @@ function App() {
 
   if (!snapshot) return <div className="loading"><img src={brandIconLogo} alt="" /> {appDisplayName}</div>;
   if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
+  if (isCatScreen) return <CatScreen snapshot={snapshot} />;
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
 
   const showHandoff = sessionOpen && view === "start";

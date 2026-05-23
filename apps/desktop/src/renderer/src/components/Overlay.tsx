@@ -38,12 +38,8 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
     <div className={`overlay ${expanded ? "expanded" : "slim"} ${snapshot.bannedSiteAlert ? "banned-active" : ""}`} style={{ opacity }}>
       {!expanded ? (
         <div className="overlay-slim">
-          <div className="slim-screen">
-            {snapshot.session ? (
-              <CatMascot mood={catMood} size="tiny" warningLevel={warningLevel} className="overlay-slim-cat" />
-            ) : (
-              <img className="slim-screen-logo" src={brandIconLogo} alt="" />
-            )}
+          <div className="slim-logo-mark">
+            <img src={brandIconLogo} alt="" />
           </div>
           <div className="vertical-status">{snapshot.session?.status || "idle"}</div>
           {snapshot.voiceState !== "idle" && <div className={`slim-voice-label ${snapshot.voiceState}`}>{snapshot.voiceState}</div>}

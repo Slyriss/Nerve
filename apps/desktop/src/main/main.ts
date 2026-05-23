@@ -67,6 +67,7 @@ protocol.registerSchemesAsPrivileged([
 let overlayWindow: BrowserWindow | null = null;
 let mainWindow: BrowserWindow | null = null;
 let blockerWindow: BrowserWindow | null = null;
+let catWindow: BrowserWindow | null = null;
 let db: Database.Database;
 let orm: BetterSQLite3Database<typeof schema>;
 let captureService: CaptureService | null = null;
@@ -98,6 +99,8 @@ let isQuitting = false;
 const overlaySlimWidth = 56;
 const overlayExpandedWidth = 260;
 const overlayBannedWidth = 320;
+const catScreenWidth = 124;
+const catScreenHeight = 148;
 const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 const MAX_REMINDER_WAKE_MS = 60_000;
 const LOCK_IN_BLOCKER_DELAY_MS = 20_000;
@@ -306,11 +309,15 @@ function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, 
     const routineIntervalMinutes = normalizeRoutineInterval(step.routineIntervalMinutes, routineText);
     const routineNextAt = nextRoutineTime(step, routineIntervalMinutes);
 
-    // Time resolution order: AI dueAt → step-level text → goal-proximity match → goal-order fallback
-    let dueAt = validIso(step.dueAt) ?? extractTimeIso(`${step.title} ${step.deadlineText ?? ""}`);
+    const explicitDueText = typeof step.dueAt === "string" && step.dueAt.trim().length > 0;
+    const explicitReminderText = typeof step.reminderAt === "string" && step.reminderAt.trim().length > 0;
+
+    // Time resolution order: valid AI dueAt → step-level text → goal-proximity match → goal-order fallback.
+    // If AI explicitly supplied an invalid date string, null it instead of guessing a replacement.
+    let dueAt = explicitDueText ? validIso(step.dueAt) : validIso(step.dueAt) ?? extractTimeIso(`${step.title} ${step.deadlineText ?? ""}`);
     let deadlineText = step.deadlineText?.trim() || "";
 
-    if (!dueAt && contextText) {
+    if (!dueAt && !explicitDueText && contextText) {
       // Find the nearest unassigned goal time to a keyword from the step title
       const keywords = step.title.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
       const goalLower = contextText.toLowerCase();
@@ -339,9 +346,9 @@ function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, 
       }
     }
 
-    const reminderAt = routineNextAt ?? validIso(step.reminderAt) ?? (() => {
+    const reminderAt = routineNextAt ?? (explicitReminderText ? validIso(step.reminderAt) : validIso(step.reminderAt) ?? (() => {
       return dueAt ? new Date(Date.parse(dueAt) - 15 * 60_000).toISOString() : null;
-    })();
+    })());
 
     return {
       title: step.title.trim(),
@@ -2344,9 +2351,11 @@ function broadcast() {
   const data = snapshot();
   overlayWindow?.webContents.send("nerve:snapshot", data);
   mainWindow?.webContents.send("nerve:snapshot", data);
+  catWindow?.webContents.send("nerve:snapshot", data);
   if (blockerWindow && !blockerWindow.isDestroyed()) {
     blockerWindow.webContents.send("nerve:snapshot", data);
   }
+  syncCatWindowVisibility(data);
 }
 
 function applyOverlayBounds() {
@@ -2402,6 +2411,62 @@ function createOverlayWindow() {
 function closeOverlayWindow() {
   const window = overlayWindow;
   overlayWindow = null;
+  if (window && !window.isDestroyed()) {
+    window.close();
+  }
+}
+
+function createCatWindow() {
+  if (catWindow && !catWindow.isDestroyed()) return;
+  const display = screen.getPrimaryDisplay();
+  const workArea = display.workArea;
+  catWindow = new BrowserWindow({
+    title: `${APP_DISPLAY_NAME} cat`,
+    width: catScreenWidth,
+    height: catScreenHeight,
+    x: workArea.x + workArea.width - overlaySlimWidth - catScreenWidth - 20,
+    y: workArea.y + 96,
+    frame: false,
+    transparent: true,
+    backgroundColor: "#00000000",
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    minimizable: false,
+    maximizable: false,
+    fullscreenable: false,
+    focusable: true,
+    show: false,
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  catWindow.setAlwaysOnTop(true, "screen-saver");
+  catWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  catWindow.on("closed", () => {
+    catWindow = null;
+  });
+  void loadWindow(catWindow, "/cat");
+}
+
+function syncCatWindowVisibility(data: AppSnapshot) {
+  if (!data.session) {
+    if (catWindow && !catWindow.isDestroyed()) {
+      catWindow.hide();
+    }
+    return;
+  }
+  if (!catWindow || catWindow.isDestroyed()) {
+    createCatWindow();
+  }
+  catWindow?.showInactive();
+}
+
+function closeCatWindow() {
+  const window = catWindow;
+  catWindow = null;
   if (window && !window.isDestroyed()) {
     window.close();
   }
@@ -2761,7 +2826,8 @@ function registerIpc() {
           activeApp: activeWindow.activeApp,
           windowTitle: activeWindow.windowTitle
         });
-    const planSteps = sortPlanStepsBySchedule(normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal));
+    const normalizedPlanSteps = parsedSteps.length ? parsedSteps : normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal);
+    const planSteps = parsedSteps.length ? normalizedPlanSteps : sortPlanStepsBySchedule(normalizedPlanSteps);
 
     stopSessionLoops();
     voiceHistory = [];
@@ -3625,6 +3691,8 @@ app.whenReady().then(() => {
   createOverlayWindow();
   createMainWindow();
   activeSessionId = getResumableSession()?.id ?? null;
+  createCatWindow();
+  syncCatWindowVisibility(snapshot());
   pruneOldScreenshots();
   pruneMissingScreenshotFiles();
   resetCaptureLoop();
@@ -3634,6 +3702,8 @@ app.whenReady().then(() => {
     if (BrowserWindow.getAllWindows().length === 0) {
       createOverlayWindow();
       createMainWindow();
+      createCatWindow();
+      syncCatWindowVisibility(snapshot());
     }
   });
   if (process.env.NERVE_BREAK_TEST === "1") {
@@ -3657,6 +3727,7 @@ app.on("before-quit", () => {
   isQuitting = true;
   globalShortcut.unregisterAll();
   closeOverlayWindow();
+  closeCatWindow();
 });
 
 app.on("window-all-closed", () => {

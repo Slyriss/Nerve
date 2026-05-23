@@ -313,6 +313,153 @@ function chooseActivityTitle(a: string, b: string) {
   return score(b) > score(a) ? b : a;
 }
 
+const userStates = ["on_task", "productive_drift", "unproductive_drift", "stuck", "thinking", "progress", "unknown"] as const;
+const taskRelevanceValues = ["on_task", "possibly_related", "off_task", "unknown"] as const;
+const progressStateValues = ["changed", "unchanged", "complete_suggested", "unknown"] as const;
+const interventionTypes = ["none", "step_card", "drift_card", "thinking_hold"] as const;
+const urgencyValues = ["low", "medium"] as const;
+const breadcrumbRelevanceValues = ["productive", "unproductive", "unknown"] as const;
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === "object" && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+}
+
+function pickValue(source: Record<string, unknown>, keys: string[]) {
+  for (const key of keys) {
+    if (source[key] !== undefined && source[key] !== null) return source[key];
+  }
+  return undefined;
+}
+
+function stringValue(value: unknown, fallback = "") {
+  if (typeof value === "string") return value.trim();
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  return fallback;
+}
+
+function booleanValue(value: unknown, fallback = false) {
+  if (typeof value === "boolean") return value;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "yes", "1"].includes(normalized)) return true;
+    if (["false", "no", "0"].includes(normalized)) return false;
+  }
+  return fallback;
+}
+
+function integerValue(value: unknown, fallback: number) {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+  return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
+}
+
+function enumValue<T extends readonly string[]>(value: unknown, allowed: T, fallback: T[number]): T[number] {
+  const normalized = stringValue(value).toLowerCase().replace(/[\s-]+/g, "_");
+  return allowed.find((item) => item.toLowerCase() === normalized || item.toLowerCase().replace(/[\s-]+/g, "_") === normalized) ?? fallback;
+}
+
+function parsePlanContent(content: string, input: GeneratePlanInput): GeneratePlanOutput | null {
+  try {
+    const payload = parseJsonObject(content);
+    const parsed = generatePlanOutputSchema.safeParse(payload);
+    if (parsed.success) return compactActivityPlan(input, parsed.data);
+
+    const root = objectValue(payload);
+    const rawSteps = Array.isArray(payload)
+      ? payload
+      : Array.isArray(root?.steps)
+        ? root.steps
+        : Array.isArray(root?.activities)
+          ? root.activities
+          : Array.isArray(root?.tasks)
+            ? root.tasks
+            : Array.isArray(root?.plan)
+              ? root.plan
+              : [];
+    if (!rawSteps.length) return null;
+
+    const repaired = {
+      steps: rawSteps
+        .map((raw) => {
+          const step = objectValue(raw);
+          if (!step) return null;
+          const title = stringValue(pickValue(step, ["title", "activity", "task", "name", "summary"]));
+          const nextAction = stringValue(
+            pickValue(step, ["nextAction", "next_action", "action", "firstAction", "first_action", "guidance"]),
+            title ? `Open the relevant place and start: ${title}.` : ""
+          );
+          if (!title || !nextAction) return null;
+          return {
+            title,
+            nextAction,
+            explanation: stringValue(pickValue(step, ["explanation", "reason", "why", "note"]), "One small step is enough."),
+            taskType: pickValue(step, ["taskType", "task_type", "type", "scope", "category"]) ?? input.taskType,
+            deadlineText: stringValue(pickValue(step, ["deadlineText", "deadline_text", "deadline", "dueText", "due_text"])),
+            dueAt: pickValue(step, ["dueAt", "due_at", "due", "deadlineAt", "deadline_at"]) ?? null,
+            reminderAt: pickValue(step, ["reminderAt", "reminder_at", "remindAt", "remind_at"]) ?? null
+          };
+        })
+        .filter(Boolean)
+    };
+    const repairedParsed = generatePlanOutputSchema.safeParse(repaired);
+    return repairedParsed.success ? compactActivityPlan(input, repairedParsed.data) : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseAnalyzeContent(content: string, input: AnalyzeScreenInput): AnalyzeScreenOutput | null {
+  try {
+    const payload = parseJsonObject(content);
+    const parsed = analyzeScreenOutputSchema.safeParse(payload);
+    if (parsed.success) return parsed.data;
+    const root = objectValue(payload);
+    if (!root) return null;
+    const userState = enumValue(pickValue(root, ["userState", "user_state", "state", "classification"]), userStates, input.thinkingPauseActive ? "thinking" : "unknown");
+    const shouldIntervene = booleanValue(
+      pickValue(root, ["shouldIntervene", "should_intervene", "intervene"]),
+      userState === "stuck" || userState === "unproductive_drift"
+    );
+    const repaired = {
+      userState,
+      taskRelevance: enumValue(pickValue(root, ["taskRelevance", "task_relevance", "relevance"]), taskRelevanceValues, userState === "unproductive_drift" ? "off_task" : "unknown"),
+      progressState: enumValue(pickValue(root, ["progressState", "progress_state", "progress"]), progressStateValues, "unknown"),
+      activeContext: stringValue(pickValue(root, ["activeContext", "active_context", "context"]), `${input.activeApp}: ${input.windowTitle}`),
+      visibleChangeSummary: stringValue(pickValue(root, ["visibleChangeSummary", "visible_change_summary", "changeSummary", "change_summary"]), input.screenshotChangedSinceLastCapture ? "The screen changed since the last capture." : "The screen did not visibly change."),
+      conciseExplanation: stringValue(pickValue(root, ["conciseExplanation", "concise_explanation", "explanation", "message"]), "I’ll keep the next step ready."),
+      suggestedNextAction: stringValue(pickValue(root, ["suggestedNextAction", "suggested_next_action", "nextAction", "next_action"]), input.currentStep.nextAction),
+      suggestedStepComplete: booleanValue(pickValue(root, ["suggestedStepComplete", "suggested_step_complete", "stepComplete", "step_complete"]), false),
+      shouldIntervene,
+      interventionType: enumValue(pickValue(root, ["interventionType", "intervention_type"]), interventionTypes, shouldIntervene ? "step_card" : "none"),
+      urgency: enumValue(pickValue(root, ["urgency"]), urgencyValues, "low"),
+      breadcrumbRelevance: enumValue(pickValue(root, ["breadcrumbRelevance", "breadcrumb_relevance", "driftRelevance", "drift_relevance"]), breadcrumbRelevanceValues, "unknown"),
+      detectedTaskType: pickValue(root, ["detectedTaskType", "detected_task_type", "taskType", "task_type"]) ?? undefined
+    };
+    const repairedParsed = analyzeScreenOutputSchema.safeParse(repaired);
+    return repairedParsed.success ? repairedParsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
+function parseAtomizeContent(content: string, input: AtomizeStepInput): AtomizeStepOutput | null {
+  try {
+    const payload = parseJsonObject(content);
+    const parsed = atomizeStepOutputSchema.safeParse(payload);
+    if (parsed.success) return parsed.data;
+    const root = objectValue(payload);
+    if (!root) return null;
+    const repaired = {
+      nextAction: stringValue(pickValue(root, ["nextAction", "next_action", "action", "smallerAction", "smaller_action"]), input.currentNextAction),
+      explanation: stringValue(pickValue(root, ["explanation", "reason", "why"]), "One smaller physical step is enough."),
+      atomizationLevel: Math.max(input.atomizationLevel + 1, integerValue(pickValue(root, ["atomizationLevel", "atomization_level", "level"]), input.atomizationLevel + 1))
+    };
+    const repairedParsed = atomizeStepOutputSchema.safeParse(repaired);
+    return repairedParsed.success ? repairedParsed.data : null;
+  } catch {
+    return null;
+  }
+}
+
 export class DeepSeekAIProvider implements AIProvider {
   readonly name = "deepseek" as const;
 
@@ -323,24 +470,44 @@ export class DeepSeekAIProvider implements AIProvider {
 
   async generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput> {
     const content = await this.chat(planPrompt(input));
-    const parsed = generatePlanOutputSchema.safeParse(parseJsonObject(content));
-    if (parsed.success) return compactActivityPlan(input, parsed.data);
+    const parsed = parsePlanContent(content, input);
+    if (parsed) return parsed;
     const repairContent = await this.chat(
       `${planPrompt(input)}
 
 The previous response did not meet the required contract. Return strict JSON only. If the user's text contains distinct activities, return one row per activity. Every row must include title, nextAction, explanation, taskType, deadlineText, dueAt, and reminderAt. Use null for dueAt/reminderAt when no deadline is known.`
     );
+    const repaired = parsePlanContent(repairContent, input);
+    if (repaired) return repaired;
     return compactActivityPlan(input, generatePlanOutputSchema.parse(parseJsonObject(repairContent)));
   }
 
   async analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput> {
     const content = await this.chat(screenAnalysisPrompt(input));
-    return analyzeScreenOutputSchema.parse(parseJsonObject(content));
+    const parsed = parseAnalyzeContent(content, input);
+    if (parsed) return parsed;
+    const repairContent = await this.chat(
+      `${screenAnalysisPrompt(input)}
+
+The previous response did not meet the required contract. Return strict JSON only, with every required key present. Use the exact enum values from the schema.`
+    );
+    const repaired = parseAnalyzeContent(repairContent, input);
+    if (repaired) return repaired;
+    return analyzeScreenOutputSchema.parse(parseJsonObject(repairContent));
   }
 
   async atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput> {
     const content = await this.chat(atomizePrompt(input));
-    return atomizeStepOutputSchema.parse(parseJsonObject(content));
+    const parsed = parseAtomizeContent(content, input);
+    if (parsed) return parsed;
+    const repairContent = await this.chat(
+      `${atomizePrompt(input)}
+
+The previous response did not meet the required contract. Return strict JSON only with nextAction, explanation, and atomizationLevel.`
+    );
+    const repaired = parseAtomizeContent(repairContent, input);
+    if (repaired) return repaired;
+    return atomizeStepOutputSchema.parse(parseJsonObject(repairContent));
   }
 
   private async chat(prompt: string, retries = 1): Promise<string> {

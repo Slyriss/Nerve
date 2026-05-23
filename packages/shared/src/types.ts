@@ -43,6 +43,7 @@ export const taskTypes: TaskType[] = [
 
 export type SessionStatus = "active" | "paused" | "completed";
 export type StepStatus = "pending" | "active" | "complete";
+export type GuidanceStepStatus = "pending" | "active" | "complete";
 export type AIProviderName = "deepseek";
 export type UserState =
   | "on_task"
@@ -162,6 +163,17 @@ export interface SessionRecord {
   updatedAt: string;
 }
 
+export interface SessionSummaryRecord extends SessionRecord {
+  stepCount: number;
+  completedStepCount: number;
+  completionRate: number;
+  durationSeconds: number;
+  screenshotCount: number;
+  observationCount: number;
+  driftCount: number;
+  lastEventType?: string | null;
+}
+
 export interface StepRecord {
   id: string;
   sessionId: string;
@@ -174,6 +186,36 @@ export interface StepRecord {
   dueAt?: string | null;
   reminderAt?: string | null;
   status: StepStatus;
+  atomizationLevel: number;
+  delayCount: number;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface ActivityRecord {
+  id: string;
+  sessionId: string;
+  orderIndex: number;
+  title: string;
+  taskType: TaskType;
+  deadlineText: string;
+  dueAt?: string | null;
+  reminderAt?: string | null;
+  status: StepStatus;
+  createdAt: string;
+  updatedAt: string;
+  completedAt?: string | null;
+}
+
+export interface GuidanceStepRecord {
+  id: string;
+  activityId: string;
+  sessionId: string;
+  orderIndex: number;
+  nextAction: string;
+  explanation: string;
+  status: GuidanceStepStatus;
   atomizationLevel: number;
   delayCount: number;
   createdAt: string;
@@ -256,6 +298,13 @@ export interface BreadcrumbRecord extends BreadcrumbDraft {
   sessionId: string;
 }
 
+export interface BannedSiteAlert {
+  rule: string;
+  activeApp: string;
+  windowTitle: string;
+  detectedAt: string;
+}
+
 export interface NerveSettings {
   aiProvider: AIProviderName;
   deepseekApiKey: string;
@@ -267,11 +316,15 @@ export interface NerveSettings {
   panelOpacity: 0.3 | 0.5 | 0.8;
   storeScreenshots: boolean;
   language: DisplayLanguage;
+  bannedSitesEnabled: boolean;
+  bannedSites: string[];
 }
 
 export interface AppSnapshot {
   session: SessionRecord | null;
   steps: StepRecord[];
+  activities: ActivityRecord[];
+  guidanceSteps: GuidanceStepRecord[];
   activeStep: StepRecord | null;
   screenshots: ScreenshotRecord[];
   events: EventRecord[];
@@ -283,6 +336,7 @@ export interface AppSnapshot {
   overlayExpanded: boolean;
   delayUntil: string | null;
   thinkingPauseUntil: string | null;
+  bannedSiteAlert: BannedSiteAlert | null;
   screenshotFolder: string;
 }
 
@@ -290,11 +344,13 @@ export const defaultSettings: NerveSettings = {
   aiProvider: "deepseek",
   deepseekApiKey: "",
   deepseekModel: "deepseek-chat",
-  screenshotIntervalSeconds: 60,
+  screenshotIntervalSeconds: 10,
   stuckThresholdMinutes: 8,
   driftThresholdMinutes: 6,
   thinkingPauseMinutes: 5,
   panelOpacity: 0.5,
   storeScreenshots: true,
-  language: "en"
+  language: "en",
+  bannedSitesEnabled: false,
+  bannedSites: ["youtube.com", "tiktok.com", "instagram.com", "reddit.com", "netflix.com"]
 };

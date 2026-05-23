@@ -26,9 +26,11 @@ Tone rules:
 Response language: ${responseLanguage(input.language)}
 
 Generate a concrete sequential plan for the user's current task type.
-If the user pasted a task list with multiple activities, return one row per user-facing activity, not many micro-steps. For example, "finish slides at 4pm, walk dog at 5pm, prepare script by 8pm" should return three activity rows.
-For a single broad activity, return 3 to 7 activity-level milestones only when it truly needs sequencing.
-Avoid vague steps like "work on it". Each row needs one immediately physical next action, a short explanation, and a taskType.
+If the user pasted a task list with multiple activities, strongly prefer exactly one high-level row per user-facing activity. Do not expand pasted lists into prep/return/micro-step rows.
+The row title must stay as the overarching task the user recognizes, such as "Eat lunch", "Shower", "Walk dog", "Finish slides", or "Pay rent".
+Do not break routine activities like lunch, showering, walking the dog, taking medication, eating dinner, commuting, or basic errands into separate prep/start/return/reset rows.
+For a single broad activity, return 3 to 7 activity-level milestones only when it truly needs sequencing because the activity is large work, such as an essay, coding fix, research task, presentation, or admin process.
+Avoid vague steps like "work on it". Each row needs one immediately physical next action, a short explanation, and a taskType. The nextAction and explanation may contain the first small physical action for the sidebar, but the title must remain the high-level activity.
 Use only these exact taskType values: "Essay writing", "General writing", "Coding", "Research", "Study", "Email or admin", "Presentation", "Personal / life", "Health / self-care", "Household / chores", "Errands", "Meals", "Pet care", "Exercise", "Social / communication", "Finance / bills", "Design or creative", "Planning", "Mixed work".
 Use the most specific taskType that fits. For example: shower = "Health / self-care"; dinner = "Meals"; walk dog = "Pet care"; finish slides = "Presentation"; pay rent = "Finance / bills"; text someone back = "Social / communication"; clean room = "Household / chores".
 The user may paste a long messy task list. Parse it into distinct user activities, identify explicit and implied deadlines, order the activities by deadline/risk/dependencies, and preserve the important task names.
@@ -67,10 +69,10 @@ Distinct support guidance:
 - Personal/life: treat non-work obligations as valid; sequence them by time, energy, travel/prep needs, and bodily needs without guilt.
 - Health/self-care: use gentle transitions and enough prep time; do not frame body care as a distraction.
 - Household/chores: make the first visible move tiny and time-boxed.
-- Errands: include prep, travel, required item, and return/reset when relevant.
-- Meals: account for prep/eating time and do not shame hunger.
-- Pet care: account for the animal's routine and any outdoor prep.
-- Exercise: include changing clothes, travel/setup, workout, and cool-down if relevant.
+- Errands: keep the row as the errand itself; mention prep, travel, required items, or return/reset only inside nextAction/explanation when relevant.
+- Meals: keep the row as the meal itself; account for prep/eating time and do not shame hunger.
+- Pet care: keep the row as the pet-care activity itself; mention outdoor prep only inside nextAction/explanation when relevant.
+- Exercise: keep the row as the workout/walk/activity itself; mention changing clothes, travel/setup, or cool-down only inside nextAction/explanation when relevant.
 - Social/communication: keep messages/calls bounded and clear.
 - Finance/bills: preserve due dates, confirmation steps, and payment safety checks.
 - Design/creative: guide visible edits, compare against the goal, save versions.

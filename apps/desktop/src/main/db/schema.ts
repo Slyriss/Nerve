@@ -32,6 +32,36 @@ export const steps = sqliteTable("steps", {
   completedAt: text("completed_at")
 });
 
+export const activities = sqliteTable("activities", {
+  id: text("id").primaryKey(),
+  sessionId: text("session_id").notNull(),
+  orderIndex: integer("order_index").notNull(),
+  title: text("title").notNull(),
+  taskType: text("task_type").notNull().default("General writing"),
+  deadlineText: text("deadline_text").notNull().default(""),
+  dueAt: text("due_at"),
+  reminderAt: text("reminder_at"),
+  status: text("status").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at")
+});
+
+export const guidanceSteps = sqliteTable("guidance_steps", {
+  id: text("id").primaryKey(),
+  activityId: text("activity_id").notNull(),
+  sessionId: text("session_id").notNull(),
+  orderIndex: integer("order_index").notNull(),
+  nextAction: text("next_action").notNull(),
+  explanation: text("explanation").notNull(),
+  status: text("status").notNull(),
+  atomizationLevel: integer("atomization_level").notNull(),
+  delayCount: integer("delay_count").notNull(),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull(),
+  completedAt: text("completed_at")
+});
+
 export const screenshots = sqliteTable("screenshots", {
   id: text("id").primaryKey(),
   sessionId: text("session_id").notNull(),
@@ -125,6 +155,8 @@ export const settingsTable = sqliteTable("settings", {
 export const schema = {
   sessions,
   steps,
+  activities,
+  guidanceSteps,
   screenshots,
   aiObservations,
   events,

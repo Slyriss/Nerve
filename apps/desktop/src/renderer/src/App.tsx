@@ -1,23 +1,34 @@
 import { useEffect, useState, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  Activity,
+  ArrowDown,
+  ArrowUp,
+  CalendarClock,
+  Camera,
   Check,
   ChevronLeft,
   ChevronRight,
   Clock,
+  Database,
   Eye,
   FileText,
   FolderOpen,
+  KeyRound,
   ListChecks,
+  Minimize2,
   Pause,
+  Play,
   Plus,
+  RefreshCw,
   Settings,
+  ShieldCheck,
   Trash2
 } from "lucide-react";
-import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type StepRecord, type TaskType } from "@nerve/shared";
+import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type SessionSummaryRecord, type StepRecord, type TaskType } from "@nerve/shared";
 import "./styles.css";
 
-type View = "start" | "plan" | "log" | "settings";
+type View = "start" | "plan" | "log" | "history" | "settings";
 type CopyKey =
   | "privateCopilot"
   | "session"
@@ -26,6 +37,10 @@ type CopyKey =
   | "handoffBody"
   | "keepSidebarSlim"
   | "endSession"
+  | "pauseSession"
+  | "resumeSession"
+  | "pausedTitle"
+  | "pausedBody"
   | "ready"
   | "goal"
   | "taskType"
@@ -70,7 +85,15 @@ type CopyKey =
   | "openScreenshotFolder"
   | "deleteData"
   | "viewPlan"
-  | "viewLog";
+  | "viewLog"
+  | "history"
+  | "hotkeyHint"
+  | "bannedSites"
+  | "bannedSitesEnabled"
+  | "bannedSitesHelp"
+  | "bannedSiteTitle"
+  | "bannedSiteBody"
+  | "bannedSiteAction";
 
 const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
   en: {
@@ -81,6 +104,10 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     handoffBody: "You can close or ignore this main window. The current step and any gentle prompts will stay in the slim sidebar.",
     keepSidebarSlim: "Keep sidebar slim",
     endSession: "End session",
+    pauseSession: "Pause session",
+    resumeSession: "Resume session",
+    pausedTitle: "Session paused.",
+    pausedBody: "I’ll hold this spot. Capture and reminders are paused until you resume.",
     ready: "Ready when you are",
     goal: "Goal",
     taskType: "Task type",
@@ -121,11 +148,19 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     thinkingPause: "Thinking pause",
     panelOpacity: "Panel opacity",
     storeScreenshots: "Store screenshots locally",
-    privacyNotice: "In DeepSeek mode, AI analysis may send screen/session context to the configured API. Mock mode does not upload screenshots.",
+    privacyNotice: "DeepSeek analysis may send screen/session context to the configured API. Screenshots stay local unless you explicitly change the implementation.",
     openScreenshotFolder: "Open screenshot folder",
     deleteData: "Delete all local session data",
     viewPlan: "View plan",
-    viewLog: "Session log"
+    viewLog: "Session log",
+    history: "History",
+    hotkeyHint: "Win+Shift+N toggles the sidebar.",
+    bannedSites: "Banned websites",
+    bannedSitesEnabled: "Intrusive banned-site overlay",
+    bannedSitesHelp: "One domain per line. Nerve detects these locally from the active browser window when Windows exposes the page URL or title.",
+    bannedSiteTitle: "Leave this site.",
+    bannedSiteBody: "This site is on your banned list for this session. Close it or switch back to the task now.",
+    bannedSiteAction: "Return to the current task:"
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -135,6 +170,10 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     handoffBody: "你可以关闭或忽略主窗口。当前步骤和温和提示会留在右侧小栏里。",
     keepSidebarSlim: "保持侧栏收起",
     endSession: "结束会话",
+    pauseSession: "暂停会话",
+    resumeSession: "继续会话",
+    pausedTitle: "会话已暂停。",
+    pausedBody: "我会保留当前位置。截图和提醒会暂停，直到你继续。",
     ready: "准备好时开始",
     goal: "目标",
     taskType: "任务类型",
@@ -175,11 +214,19 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     thinkingPause: "思考暂停",
     panelOpacity: "侧栏透明度",
     storeScreenshots: "本地保存截图",
-    privacyNotice: "使用 DeepSeek 时，AI 分析可能会把屏幕/会话上下文发送到配置的 API。Mock 模式不会上传截图。",
+    privacyNotice: "DeepSeek 分析可能会把屏幕/会话上下文发送到配置的 API。截图仍保存在本地，除非你明确修改实现。",
     openScreenshotFolder: "打开截图文件夹",
     deleteData: "删除所有本地会话数据",
     viewPlan: "查看计划",
-    viewLog: "会话日志"
+    viewLog: "会话日志",
+    history: "历史",
+    hotkeyHint: "Win+Shift+N 可切换侧栏。",
+    bannedSites: "禁止网站",
+    bannedSitesEnabled: "强提醒禁止网站覆盖层",
+    bannedSitesHelp: "每行一个域名。Windows 暴露当前浏览器 URL 或标题时，Nerve 会在本地检测这些网站。",
+    bannedSiteTitle: "离开这个网站。",
+    bannedSiteBody: "这个网站在你的禁止列表里。现在关闭它，或切回当前任务。",
+    bannedSiteAction: "回到当前任务："
   }
 };
 
@@ -270,11 +317,26 @@ function useNow(intervalMs = 1000) {
   return value;
 }
 
+function completionStats(steps: StepRecord[]) {
+  const total = steps.length;
+  const completed = steps.filter((step) => step.status === "complete").length;
+  const active = steps.find((step) => step.status === "active");
+  const percent = total === 0 ? 0 : Math.round((completed / total) * 100);
+  return { active, completed, percent, total };
+}
+
+function nextScheduledLabel(steps: Schedulable[]) {
+  const now = Date.now();
+  const next = sortBySchedule(steps).find((step) => scheduleTime(step) >= now);
+  if (!next) return "No deadline";
+  return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+}
+
 function App() {
   const [snapshot, setSnapshot] = useSnapshot();
   const [view, setView] = useState<View>(() => {
     const route = location.hash.replace("#/", "");
-    return route === "plan" || route === "log" || route === "settings" ? route : "start";
+    return route === "plan" || route === "log" || route === "history" || route === "settings" ? route : "start";
   });
   const isOverlay = location.hash.startsWith("#/overlay");
 
@@ -282,8 +344,8 @@ function App() {
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
   const t = useCopy(snapshot.settings.language);
 
-  const sessionActive = snapshot.session?.status === "active";
-  const showHandoff = sessionActive && view === "start";
+  const sessionOpen = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
+  const showHandoff = sessionOpen && view === "start";
 
   return (
     <main className="app-shell">
@@ -299,7 +361,7 @@ function App() {
           <button className={view === "start" ? "active" : ""} onClick={() => setView("start")}>
             <FileText size={16} /> {t("session")}
           </button>
-          {sessionActive && (
+          {sessionOpen && (
             <>
               <button className={view === "plan" ? "active" : ""} onClick={() => setView("plan")}>
                 <ListChecks size={16} /> {t("viewPlan")}
@@ -309,18 +371,46 @@ function App() {
               </button>
             </>
           )}
+          <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>
+            <Clock size={16} /> {t("history")}
+          </button>
           <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>
             <Settings size={16} /> {t("settings")}
           </button>
         </nav>
       </header>
 
+      {sessionOpen && <SessionCommandBar snapshot={snapshot} />}
       {showHandoff && <ActiveSessionHandoff snapshot={snapshot} setSnapshot={setSnapshot} setView={setView} />}
       {!showHandoff && view === "start" && <SessionStart setSnapshot={setSnapshot} settings={snapshot.settings} />}
       {!showHandoff && view === "plan" && <PlanEditor snapshot={snapshot} setSnapshot={setSnapshot} />}
       {!showHandoff && view === "log" && <SessionLog snapshot={snapshot} />}
+      {!showHandoff && view === "history" && <SessionHistory />}
       {view === "settings" && <SettingsScreen snapshot={snapshot} setSnapshot={setSnapshot} />}
     </main>
+  );
+}
+
+function SessionCommandBar({ snapshot }: { snapshot: AppSnapshot }) {
+  const { completed, percent, total } = completionStats(snapshot.steps);
+  const latestState = snapshot.observations[0]?.userState;
+  const t = useCopy(snapshot.settings.language);
+  return (
+    <section className="command-bar">
+      <div className="command-primary">
+        <span className={`status-dot ${snapshot.session?.status || "idle"}`} />
+        <div>
+          <strong>{snapshot.session?.goal || t("ready")}</strong>
+          <span>{snapshot.activeStep?.title || t("noSession")}</span>
+        </div>
+      </div>
+      <div className="command-metrics">
+        <span><ListChecks size={14} /> {completed}/{total} done</span>
+        <span><Activity size={14} /> {percent}%</span>
+        <span><CalendarClock size={14} /> {nextScheduledLabel(snapshot.steps)}</span>
+        <span className={`state-pill ${latestState || "unknown"}`}>{stateLabel(latestState, t)}</span>
+      </div>
+    </section>
   );
 }
 
@@ -334,12 +424,13 @@ function ActiveSessionHandoff({
   setView: (view: View) => void;
 }) {
   const t = useCopy(snapshot.settings.language);
+  const paused = snapshot.session?.status === "paused";
   return (
     <section className="handoff-layout">
       <div className="handoff-panel">
         <div className="mark">N</div>
-        <h2>{t("runningSideTab")}</h2>
-        <p className="muted">{t("handoffBody")}</p>
+        <h2>{paused ? t("pausedTitle") : t("runningSideTab")}</h2>
+        <p className="muted">{paused ? t("pausedBody") : t("handoffBody")}</p>
         <div className="button-row">
           <button onClick={() => setView("plan")}>
             <ListChecks size={16} /> {t("viewPlan")}
@@ -349,9 +440,21 @@ function ActiveSessionHandoff({
           </button>
         </div>
         <div className="button-row">
-          <button onClick={() => window.nerve.setOverlayExpanded(false)}>{t("keepSidebarSlim")}</button>
+          {paused ? (
+            <button className="primary" onClick={async () => setSnapshot(await window.nerve.resumeSession())}>
+              <Play size={16} /> {t("resumeSession")}
+            </button>
+          ) : (
+            <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
+              <Pause size={16} /> {t("pauseSession")}
+            </button>
+          )}
+          <button onClick={() => window.nerve.setOverlayExpanded(false)}>
+            <Minimize2 size={16} /> {t("keepSidebarSlim")}
+          </button>
           <button className="danger" onClick={async () => setSnapshot(await window.nerve.endSession())}>{t("endSession")}</button>
         </div>
+        <p className="subtle">{t("hotkeyHint")}</p>
       </div>
     </section>
   );
@@ -411,24 +514,48 @@ function SessionStart({
   return (
     <section className="start-layout">
       <div className="start-panel">
-        <h2>{t("ready")}</h2>
-        <label>
-          {t("goal")}
-          <textarea
-            value={goal}
-            onChange={(event) => {
-              setGoal(event.target.value);
-              setParsedSteps([]);
-              setDetectedTaskTypes([]);
-            }}
-            placeholder="Finish math research, walk the dog at 3pm, shower at 5pm, dinner at 6pm..."
-          />
-        </label>
-        <div className="button-row">
-          <button disabled={!goal.trim() || parseBusy || busy} onClick={parse}>
-            <ListChecks size={16} /> {parseBusy ? "Parsing..." : "Parse task list"}
+        <div className="page-title">
+          <span className="eyebrow">{t("session")}</span>
+          <h2>{t("ready")}</h2>
+        </div>
+        <div className="start-composer">
+          <label>
+            {t("goal")}
+            <textarea
+              value={goal}
+              onChange={(event) => {
+                setGoal(event.target.value);
+                setParsedSteps([]);
+                setDetectedTaskTypes([]);
+              }}
+              placeholder="Finish math research, walk the dog at 3pm, shower at 5pm, dinner at 6pm..."
+            />
+          </label>
+          <aside className="composer-rail">
+            <div>
+              <span className="rail-label">Provider</span>
+              <strong>DeepSeek</strong>
+            </div>
+            <div>
+              <span className="rail-label">Capture</span>
+              <strong>{settings.screenshotIntervalSeconds}s</strong>
+            </div>
+            <div>
+              <span className="rail-label">Language</span>
+              <strong>{settings.language.toUpperCase()}</strong>
+            </div>
+          </aside>
+        </div>
+        <div className="button-row split-actions">
+          <div className="button-row">
+            <button disabled={!goal.trim() || parseBusy || busy} onClick={parse}>
+              <ListChecks size={16} /> {parseBusy ? "Parsing..." : "Parse task list"}
+            </button>
+            {parsedSteps.length > 0 && <span className="subtle">{parsedSteps.length} activities parsed</span>}
+          </div>
+          <button className="primary" disabled={!goal.trim() || busy} onClick={start}>
+            <Check size={16} /> {t("startSession")}
           </button>
-          {parsedSteps.length > 0 && <span className="subtle">{parsedSteps.length} activities parsed</span>}
         </div>
         {parsedSteps.length > 0 && (
           <section className="parsed-timetable">
@@ -476,9 +603,8 @@ function SessionStart({
                 </div>
                 <div className="activity-fields">
                   <input value={step.title} onChange={(event) => patchParsedStep(index, { title: event.currentTarget.value })} />
-                  <textarea value={step.nextAction} onChange={(event) => patchParsedStep(index, { nextAction: event.currentTarget.value })} />
-                  <input value={step.explanation || ""} onChange={(event) => patchParsedStep(index, { explanation: event.currentTarget.value })} />
                   <input value={step.deadlineText || ""} placeholder="Deadline text" onChange={(event) => patchParsedStep(index, { deadlineText: event.currentTarget.value })} />
+                  <p className="subtle">The next physical action will appear in the sidebar when this activity is active.</p>
                 </div>
                 <div className="activity-controls">
                   <select value={step.taskType || detectedTaskTypes[0] || "Personal / life"} onChange={(event) => patchParsedStep(index, { taskType: event.currentTarget.value as TaskType })}>
@@ -499,19 +625,13 @@ function SessionStart({
         )}
         <p className="notice">{t("screenshotNotice")}</p>
         {error && <p className="error-note">{error}</p>}
-        <div className="button-row">
-          <button className="primary" disabled={!goal.trim() || busy} onClick={start}>
-            <Check size={16} /> {t("startSession")}
-          </button>
-        </div>
-        <p className="subtle">{t("currentProvider")}: DeepSeek</p>
       </div>
     </section>
   );
 }
 
 function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
-  const expanded = snapshot.overlayExpanded;
+  const expanded = snapshot.overlayExpanded || Boolean(snapshot.bannedSiteAlert);
   const opacity = snapshot.settings.panelOpacity;
   const completed = snapshot.steps.filter((step) => step.status === "complete").length;
   const total = snapshot.steps.length || 1;
@@ -520,7 +640,7 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
   const [sideView, setSideView] = useState<"step" | "timetable">("step");
   useNow(snapshot.delayUntil || snapshot.thinkingPauseUntil ? 1000 : 30_000);
   return (
-    <div className={`overlay ${expanded ? "expanded" : "slim"}`} style={{ opacity }}>
+    <div className={`overlay ${expanded ? "expanded" : "slim"} ${snapshot.bannedSiteAlert ? "banned-active" : ""}`} style={{ opacity }}>
       {!expanded ? (
         <div className="overlay-slim">
           <div className="mark">N</div>
@@ -540,10 +660,14 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
               <strong>Nerve</strong>
               <span>{snapshot.session?.status === "completed" ? t("sessionComplete") : t("nextStep")}</span>
             </div>
-            <span className={`state-pill ${latestState || "unknown"}`}>{stateLabel(latestState, t)}</span>
-            <button title="Collapse" onClick={() => window.nerve.setOverlayExpanded(false)}>
-              <ChevronRight size={18} />
-            </button>
+            <span className={`state-pill ${snapshot.bannedSiteAlert ? "banned" : latestState || "unknown"}`}>
+              {snapshot.bannedSiteAlert ? "Blocked" : stateLabel(latestState, t)}
+            </span>
+            {!snapshot.bannedSiteAlert && (
+              <button title="Collapse" onClick={() => window.nerve.setOverlayExpanded(false)}>
+                <ChevronRight size={18} />
+              </button>
+            )}
           </div>
           <div className="side-toggle">
             <button className={sideView === "step" ? "active" : ""} onClick={() => setSideView("step")}>
@@ -555,7 +679,7 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
           </div>
           {sideView === "step" ? (
             <>
-              <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />
+              {snapshot.bannedSiteAlert ? <BannedSiteCard snapshot={snapshot} /> : <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />}
               {snapshot.delayUntil && (
                 <div className="timer">
                   <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
@@ -572,6 +696,8 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
             <SideTimetable snapshot={snapshot} />
           )}
           <div className="overlay-links">
+            {snapshot.session?.status === "active" && <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>{t("pauseSession")}</button>}
+            {snapshot.session?.status === "paused" && <button onClick={async () => setSnapshot(await window.nerve.resumeSession())}>{t("resumeSession")}</button>}
             <button onClick={() => window.nerve.openMain("/plan")}>{t("viewPlan")}</button>
             <button onClick={() => window.nerve.openMain("/log")}>{t("viewLog")}</button>
             <button onClick={() => window.nerve.openMain("/settings")}>{t("settings")}</button>
@@ -579,6 +705,26 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
         </div>
       )}
     </div>
+  );
+}
+
+function BannedSiteCard({ snapshot }: { snapshot: AppSnapshot }) {
+  const alert = snapshot.bannedSiteAlert;
+  const t = useCopy(snapshot.settings.language);
+  return (
+    <section className="banned-card">
+      <p className="eyebrow">{alert?.rule || t("bannedSites")}</p>
+      <h2>{t("bannedSiteTitle")}</h2>
+      <p>{t("bannedSiteBody")}</p>
+      {snapshot.activeStep && (
+        <div className="return-task">
+          <span>{t("bannedSiteAction")}</span>
+          <strong>{snapshot.activeStep.title}</strong>
+          <p>{snapshot.activeStep.nextAction}</p>
+        </div>
+      )}
+      <p className="subtle">{alert?.activeApp}: {alert?.windowTitle}</p>
+    </section>
   );
 }
 
@@ -623,6 +769,8 @@ function StepCard({
   const observation = snapshot.observations[0];
   const thinking = snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now();
   const t = useCopy(snapshot.settings.language);
+  const paused = snapshot.session?.status === "paused";
+  const { completed, percent, total } = completionStats(snapshot.steps);
   async function action(type: "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking") {
     setSnapshot(await window.nerve.action(type));
   }
@@ -632,12 +780,40 @@ function StepCard({
   if (snapshot.session.status === "completed" || !step) {
     return <div className="step-card"><h2>{t("sessionComplete")}</h2><p className="muted">{t("sessionComplete")}</p></div>;
   }
+  if (paused) {
+    return (
+      <section className={`step-card ${compact ? "compact" : ""}`}>
+        <div className="step-card-head">
+          <div>
+            <p className="eyebrow">{t("currentStep")}</p>
+            <h2>{step.title}</h2>
+          </div>
+          <span className="task-badge">{step.taskType}</span>
+        </div>
+        <p className="muted">{t("pausedBody")}</p>
+        <button className="primary" onClick={async () => setSnapshot(await window.nerve.resumeSession())}>
+          <Play size={16} /> {t("resumeSession")}
+        </button>
+      </section>
+    );
+  }
   return (
-    <section className="step-card">
-      <p className="eyebrow">{t("currentStep")}</p>
-      <span className="task-badge">{step.taskType}</span>
-      <h2>{step.title}</h2>
-      {step.dueAt && <p className="deadline-line">Due {new Date(step.dueAt).toLocaleString()}</p>}
+    <section className={`step-card ${compact ? "compact" : ""}`}>
+      <div className="step-card-head">
+        <div>
+          <p className="eyebrow">{t("currentStep")}</p>
+          <h2>{step.title}</h2>
+        </div>
+        <span className="task-badge">{step.taskType}</span>
+      </div>
+      <div className="progress-line" aria-label={`${percent}% complete`}>
+        <span style={{ width: `${percent}%` }} />
+      </div>
+      <div className="step-meta">
+        <span>{completed}/{total} complete</span>
+        {step.dueAt && <span>Due {new Date(step.dueAt).toLocaleString()}</span>}
+        {step.delayCount > 0 && <span>{step.delayCount} delays</span>}
+      </div>
       <p className="action-text">{observation?.suggestedNextAction || step.nextAction}</p>
       <p className="muted">
         {thinking
@@ -664,6 +840,11 @@ function StepCard({
         <button onClick={() => action("atomize")}>
           <ChevronLeft size={16} /> {t("smaller")}
         </button>
+        {!compact && (
+          <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
+            <Pause size={16} /> {t("pauseSession")}
+          </button>
+        )}
       </div>
     </section>
   );
@@ -671,22 +852,40 @@ function StepCard({
 
 function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const session = snapshot.session;
+  const { completed, percent, total } = completionStats(snapshot.steps);
   async function patch(step: StepRecord, patchValue: Partial<StepRecord>) {
     setSnapshot(await window.nerve.updateStep(step.id, patchValue));
   }
   if (!session) return <SessionStart setSnapshot={setSnapshot} settings={snapshot.settings} />;
   return (
     <section className="content-grid">
-      <div>
+      <div className="side-stack">
         <StepCard snapshot={snapshot} setSnapshot={setSnapshot} />
         <BreadcrumbTrail breadcrumbs={snapshot.breadcrumbs.slice(0, 8).reverse()} />
       </div>
       <div className="plan-list">
         <div className="section-head">
-          <h2>Editable plan</h2>
+          <div className="page-title compact">
+            <span className="eyebrow">Plan</span>
+            <h2>Editable plan</h2>
+          </div>
           <button onClick={async () => setSnapshot(await window.nerve.addStep(session.id))}>
             <Plus size={16} /> Add step
           </button>
+        </div>
+        <div className="plan-summary">
+          <div>
+            <strong>{percent}%</strong>
+            <span>{completed}/{total} complete</span>
+          </div>
+          <div>
+            <strong>{nextScheduledLabel(snapshot.steps)}</strong>
+            <span>next time</span>
+          </div>
+          <div>
+            <strong>{snapshot.reminders.length}</strong>
+            <span>reminders</span>
+          </div>
         </div>
         {snapshot.steps.map((step) => (
           <article className={`plan-step ${step.status}`} key={step.id}>
@@ -714,8 +913,12 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
               <span>{step.status}</span>
             </div>
             <div className="step-controls">
-              <button title="Move up" onClick={async () => setSnapshot(await window.nerve.reorderStep(step.id, "up"))}>↑</button>
-              <button title="Move down" onClick={async () => setSnapshot(await window.nerve.reorderStep(step.id, "down"))}>↓</button>
+              <button title="Move up" onClick={async () => setSnapshot(await window.nerve.reorderStep(step.id, "up"))}>
+                <ArrowUp size={15} />
+              </button>
+              <button title="Move down" onClick={async () => setSnapshot(await window.nerve.reorderStep(step.id, "down"))}>
+                <ArrowDown size={15} />
+              </button>
               <button title="Mark complete" onClick={() => patch(step, { status: "complete" })}>
                 <Check size={15} />
               </button>
@@ -756,7 +959,10 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
   return (
     <section className="log-layout">
       <div className="events">
-        <h2>Session log</h2>
+        <div className="page-title compact">
+          <span className="eyebrow">Telemetry</span>
+          <h2>Session log</h2>
+        </div>
         {snapshot.taskHistory.length > 0 && (
           <div className="task-history">
             <h3>Task history</h3>
@@ -769,15 +975,19 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
             ))}
           </div>
         )}
-        {snapshot.events.map((event) => (
-          <article className="event-row" key={event.id}>
-            <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-            <div>
-              <strong>{event.type.replaceAll("_", " ")}</strong>
-              <p>{event.message}</p>
-            </div>
-          </article>
-        ))}
+        {snapshot.events.length === 0 ? (
+          <EmptyState icon={<Activity size={18} />} title="No events yet" body={snapshot.session ? "The session is open." : "Start a session first."} />
+        ) : (
+          snapshot.events.map((event) => (
+            <article className="event-row" key={event.id}>
+              <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
+              <div>
+                <strong>{event.type.replaceAll("_", " ")}</strong>
+                <p>{event.message}</p>
+              </div>
+            </article>
+          ))
+        )}
       </div>
       <div className="gallery">
         {snapshot.reminders.length > 0 && (
@@ -793,21 +1003,94 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
             ))}
           </section>
         )}
-        <h2>Screenshot gallery</h2>
-        <div className="thumb-grid">
-          {snapshot.screenshots.map((shot) => (
-            <figure key={shot.id}>
-              {shot.thumbnailPath && <img src={fileSrc(shot.thumbnailPath)} alt="" />}
-              <figcaption>
-                <strong>{new Date(shot.capturedAt).toLocaleTimeString()}</strong>
-                <span>{shot.activeApp}</span>
-                <span>{shot.windowTitle}</span>
-                <span>{shot.aiState || "unknown"}</span>
-              </figcaption>
-            </figure>
+        <div className="section-head">
+          <div className="page-title compact">
+            <span className="eyebrow">Capture</span>
+            <h2>Screenshot gallery</h2>
+          </div>
+          <span className="count-pill">{snapshot.screenshots.length}</span>
+        </div>
+        {snapshot.screenshots.length === 0 ? (
+          <EmptyState icon={<Camera size={18} />} title="No screenshots yet" body="Captured frames will appear here." />
+        ) : (
+          <div className="thumb-grid">
+            {snapshot.screenshots.map((shot) => (
+              <figure key={shot.id}>
+                {shot.thumbnailPath && <img src={fileSrc(shot.thumbnailPath)} alt="" />}
+                <figcaption>
+                  <strong>{new Date(shot.capturedAt).toLocaleTimeString()}</strong>
+                  <span>{shot.activeApp}</span>
+                  <span>{shot.windowTitle}</span>
+                  <span>{shot.aiState || "unknown"}</span>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
+  return (
+    <div className="empty-state">
+      <span>{icon}</span>
+      <strong>{title}</strong>
+      <p>{body}</p>
+    </div>
+  );
+}
+
+function formatDuration(seconds: number) {
+  const safeSeconds = Math.max(0, Math.round(seconds));
+  const hours = Math.floor(safeSeconds / 3600);
+  const minutes = Math.floor((safeSeconds % 3600) / 60);
+  if (hours > 0) return `${hours}h ${minutes}m`;
+  return `${minutes}m`;
+}
+
+function SessionHistory() {
+  const [sessions, setSessions] = useState<SessionSummaryRecord[]>([]);
+  useEffect(() => {
+    window.nerve.getSessions().then(setSessions);
+  }, []);
+  return (
+    <section className="history-layout">
+      <div className="section-head">
+        <div className="page-title compact">
+          <span className="eyebrow">Archive</span>
+          <h2>Session history</h2>
+        </div>
+        <button onClick={() => window.nerve.getSessions().then(setSessions)}>
+          <RefreshCw size={16} /> Refresh
+        </button>
+      </div>
+      {sessions.length === 0 ? (
+        <p className="notice">No saved sessions yet.</p>
+      ) : (
+        <div className="history-list">
+          {sessions.map((session) => (
+            <article className={`history-card ${session.status}`} key={session.id}>
+              <div>
+                <span className="task-badge">{session.status}</span>
+                <h3>{session.goal}</h3>
+                <p className="muted">{session.taskTypes.join(" + ")}</p>
+              </div>
+              <div className="history-metrics">
+                <span><strong>{Math.round(session.completionRate * 100)}%</strong> complete</span>
+                <span><strong>{session.completedStepCount}/{session.stepCount}</strong> activities</span>
+                <span><strong>{formatDuration(session.durationSeconds)}</strong> spent</span>
+                <span><strong>{session.driftCount}</strong> drift notes</span>
+              </div>
+              <p className="subtle">
+                Started {new Date(session.startedAt).toLocaleString()}
+                {session.endedAt ? ` · Ended ${new Date(session.endedAt).toLocaleString()}` : ""}
+              </p>
+            </article>
           ))}
         </div>
-      </div>
+      )}
     </section>
   );
 }
@@ -823,30 +1106,79 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
   }
   return (
     <section className="settings-layout">
-      <h2>{t("settings")}</h2>
-      <div className="settings-grid">
-        <Select label={t("language")} value={settings.language} onChange={(value) => save({ language: value as NerveSettings["language"] })} options={["en", "zh"]} labels={{ en: t("english"), zh: t("mandarin") }} />
-        <label>
-          {t("aiProvider")}
-          <input value="DeepSeek" readOnly />
-        </label>
-        <label>
-          {t("deepseekKey")}
-          <input type="password" value={settings.deepseekApiKey} onChange={(event) => setSettings({ ...settings, deepseekApiKey: event.target.value })} onBlur={() => save({ deepseekApiKey: settings.deepseekApiKey })} />
-        </label>
-        <label>
-          {t("deepseekModel")}
-          <input value={settings.deepseekModel} onChange={(event) => setSettings({ ...settings, deepseekModel: event.target.value })} onBlur={() => save({ deepseekModel: settings.deepseekModel })} />
-        </label>
-        <Select label={t("detectionInterval")} value={settings.screenshotIntervalSeconds} onChange={(value) => save({ screenshotIntervalSeconds: Number(value) as NerveSettings["screenshotIntervalSeconds"] })} options={[60]} suffix="seconds" />
-        <Select label={t("panelOpacity")} value={settings.panelOpacity} onChange={(value) => save({ panelOpacity: Number(value) as NerveSettings["panelOpacity"] })} options={[0.5]} suffix="" />
-        <Select label={t("stuckThreshold")} value={settings.stuckThresholdMinutes} onChange={(value) => save({ stuckThresholdMinutes: Number(value) as NerveSettings["stuckThresholdMinutes"] })} options={[5, 8, 10]} suffix="minutes" />
-        <Select label={t("driftThreshold")} value={settings.driftThresholdMinutes} onChange={(value) => save({ driftThresholdMinutes: Number(value) as NerveSettings["driftThresholdMinutes"] })} options={[3, 6, 10]} suffix="minutes" />
-        <Select label={t("thinkingPause")} value={settings.thinkingPauseMinutes} onChange={(value) => save({ thinkingPauseMinutes: Number(value) as NerveSettings["thinkingPauseMinutes"] })} options={[3, 5, 10]} suffix="minutes" />
-        <label className="switch-row">
-          <span>{t("storeScreenshots")}</span>
-          <input type="checkbox" checked={settings.storeScreenshots} onChange={(event) => save({ storeScreenshots: event.target.checked })} />
-        </label>
+      <div className="page-title compact">
+        <span className="eyebrow">Control</span>
+        <h2>{t("settings")}</h2>
+      </div>
+      <div className="settings-sections">
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <ShieldCheck size={17} />
+            <h3>Session behavior</h3>
+          </div>
+          <div className="settings-grid">
+            <Select label={t("language")} value={settings.language} onChange={(value) => save({ language: value as NerveSettings["language"] })} options={["en", "zh"]} labels={{ en: t("english"), zh: t("mandarin") }} />
+            <Select label={t("detectionInterval")} value={settings.screenshotIntervalSeconds} onChange={(value) => save({ screenshotIntervalSeconds: Number(value) as NerveSettings["screenshotIntervalSeconds"] })} options={[10, 30, 60]} suffix="seconds" />
+            <Select label={t("stuckThreshold")} value={settings.stuckThresholdMinutes} onChange={(value) => save({ stuckThresholdMinutes: Number(value) as NerveSettings["stuckThresholdMinutes"] })} options={[5, 8, 10]} suffix="minutes" />
+            <Select label={t("driftThreshold")} value={settings.driftThresholdMinutes} onChange={(value) => save({ driftThresholdMinutes: Number(value) as NerveSettings["driftThresholdMinutes"] })} options={[3, 6, 10]} suffix="minutes" />
+            <Select label={t("thinkingPause")} value={settings.thinkingPauseMinutes} onChange={(value) => save({ thinkingPauseMinutes: Number(value) as NerveSettings["thinkingPauseMinutes"] })} options={[3, 5, 10]} suffix="minutes" />
+            <Select label={t("panelOpacity")} value={settings.panelOpacity} onChange={(value) => save({ panelOpacity: Number(value) as NerveSettings["panelOpacity"] })} options={[0.5]} suffix="" />
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <KeyRound size={17} />
+            <h3>Provider</h3>
+          </div>
+          <div className="settings-grid">
+            <label>
+              {t("aiProvider")}
+              <input value="DeepSeek" readOnly />
+            </label>
+            <label>
+              {t("deepseekModel")}
+              <input value={settings.deepseekModel} onChange={(event) => setSettings({ ...settings, deepseekModel: event.target.value })} onBlur={() => save({ deepseekModel: settings.deepseekModel })} />
+            </label>
+            <label className="wide-field">
+              {t("deepseekKey")}
+              <input type="password" value={settings.deepseekApiKey} onChange={(event) => setSettings({ ...settings, deepseekApiKey: event.target.value })} onBlur={() => save({ deepseekApiKey: settings.deepseekApiKey })} />
+            </label>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <Eye size={17} />
+            <h3>{t("bannedSites")}</h3>
+          </div>
+          <label className="switch-row">
+            <span>{t("bannedSitesEnabled")}</span>
+            <input
+              type="checkbox"
+              checked={settings.bannedSitesEnabled}
+              onChange={(event) => save({ bannedSitesEnabled: event.target.checked })}
+            />
+          </label>
+          <label className="wide-field">
+            {t("bannedSites")}
+            <textarea
+              value={settings.bannedSites.join("\n")}
+              onChange={(event) => setSettings({ ...settings, bannedSites: event.target.value.split(/\r?\n/) })}
+              onBlur={() => save({ bannedSites: settings.bannedSites })}
+              placeholder={"youtube.com\ntiktok.com\ninstagram.com"}
+            />
+          </label>
+          <p className="subtle">{t("bannedSitesHelp")}</p>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <Database size={17} />
+            <h3>Local data</h3>
+          </div>
+          <label className="switch-row">
+            <span>{t("storeScreenshots")}</span>
+            <input type="checkbox" checked={settings.storeScreenshots} onChange={(event) => save({ storeScreenshots: event.target.checked })} />
+          </label>
+        </section>
       </div>
       <p className="notice">{t("privacyNotice")}</p>
       <div className="button-row">

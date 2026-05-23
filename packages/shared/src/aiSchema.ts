@@ -153,9 +153,19 @@ export const atomizeStepOutputSchema = z.object({
 
 export function parseJsonObject(text: string): unknown {
   const fenced = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
-  const candidate = fenced?.[1] ?? text;
-  const start = candidate.indexOf("{");
-  const end = candidate.lastIndexOf("}");
+  const candidate = (fenced?.[1] ?? text).trim();
+  try {
+    return JSON.parse(candidate);
+  } catch {
+    // Some providers add prose before/after the JSON. Fall through to bounded parsing.
+  }
+  const objectStart = candidate.indexOf("{");
+  const objectEnd = candidate.lastIndexOf("}");
+  const arrayStart = candidate.indexOf("[");
+  const arrayEnd = candidate.lastIndexOf("]");
+  const objectLooksFirst = objectStart !== -1 && (arrayStart === -1 || objectStart < arrayStart);
+  const start = objectLooksFirst ? objectStart : arrayStart;
+  const end = objectLooksFirst ? objectEnd : arrayEnd;
   if (start === -1 || end === -1 || end <= start) {
     throw new Error("AI response did not contain a JSON object.");
   }

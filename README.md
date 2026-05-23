@@ -7,19 +7,22 @@ Nerve does not click, type, block apps, close apps, modify documents, or automat
 ## What it does
 
 - **Monitors your session** — captures periodic screenshots locally to detect whether you're on task, drifting, or stuck
-- **AI-generated plan** — breaks your goal into concrete sequential steps; each step has one immediately doable physical action
+- **AI-generated plan** — turns broad goals or pasted task lists into a compact timetable, usually one high-level row per user-facing activity
+- **Sidebar guide** — shows the current activity with one immediately doable physical action, while keeping the row title broad and recognizable
 - **Gentle overlay** — slim right-side panel that expands only when intervention is warranted
 - **Atomise on demand** — any step can be broken into a smaller physical action, down to "put your hand on the mouse"
-- **Thinking pause** — hold the current step without prompts for up to 10 minutes
+- **Pause and resume** — hold prompts when you need quiet, then resume the same session
 - **5-minute delay** — snooze the overlay and return automatically
 - **Editable plan** — reorder, edit, add, or delete steps at any time
-- **Full session log** — every observation, breadcrumb, and screenshot recorded locally
+- **Session history** — review recent sessions, steps, observations, breadcrumbs, and locally stored screenshots
+- **Global hotkey** — press `Win+Shift+N` to bring Nerve back quickly
+- **Banned website overlay** — optionally keep a local domain list that forces a stronger sidebar warning when a banned site is detected
 
 ## Task types
 
-Eight built-in templates with tailored step patterns and app-detection logic:
+Built-in templates cover work, admin, creative, planning, and personal-life scopes. Nerve can keep a mixed session coherent when your day includes both project work and routine activities like lunch, showering, errands, or walking the dog.
 
-`Essay writing` · `General writing` · `Coding` · `Research` · `Study` · `Email or admin` · `Design or creative` · `Planning`
+`Essay writing` · `General writing` · `Coding` · `Research` · `Study` · `Email or admin` · `Presentation` · `Personal / life` · `Health / self-care` · `Household / chores` · `Errands` · `Meals` · `Pet care` · `Exercise` · `Social / communication` · `Finance / bills` · `Design or creative` · `Planning` · `Mixed work`
 
 ## Languages
 
@@ -29,10 +32,9 @@ English and Mandarin (中文) — switch in Settings at any time.
 
 | Provider | Key required | Privacy |
 |----------|-------------|---------|
-| Mock | No | Fully local — no network calls |
 | DeepSeek | Yes | Sends session context to DeepSeek API |
 
-Mock mode is the default and works without any setup. DeepSeek adds real screen-context analysis.
+Nerve runs in DeepSeek-only mode. There is no Mock provider in the runtime app, so configure a DeepSeek API key before starting real sessions.
 
 ## Install
 
@@ -94,9 +96,11 @@ All session data (steps, observations, breadcrumbs, screenshots) is stored local
 %APPDATA%\Nerve\NerveData\
 ```
 
-Screenshots are stored as JPEG and auto-deleted after 30 days. You can disable screenshot storage or wipe all data from Settings at any time.
+Screenshots are stored as JPEG and auto-deleted after 30 days. You can disable screenshot storage or wipe all data from Settings at any time. Session history stays local so you can resume, review, or clean up past sessions.
 
-Mock mode makes zero network requests. DeepSeek mode sends session context (goal, current step, active app/window title, elapsed time) to the configured API. Screenshots are never uploaded.
+DeepSeek mode sends session context (goal, current step, active app/window title, elapsed time) to the configured API. Screenshots are never uploaded.
+
+Banned website detection is local and best-effort. Nerve checks the active browser URL only when the operating system/browser exposes it through active-window metadata, and it stores the matched rule plus sanitized window title rather than storing full browser URLs.
 
 ## Architecture
 
@@ -126,4 +130,5 @@ If either permission is denied, the app continues running — AI analysis falls 
 
 - Active development on Windows 11 — macOS works with noted caveats, Linux untested
 - Read-only — Nerve does not automate, click, or type
+- Banned website detection is advisory, not a blocker: it shows an intrusive overlay but does not close tabs, block network access, or control other apps
 - Not a medical device or clinical ADHD treatment

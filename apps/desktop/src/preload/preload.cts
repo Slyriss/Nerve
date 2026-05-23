@@ -1,5 +1,5 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppSnapshot, NerveSettings, PlanStepDraft, StepRecord, TaskType } from "@nerve/shared";
+import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionSummaryRecord, StepRecord, TaskType } from "@nerve/shared";
 
 const nerve = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:getSnapshot"),
@@ -20,6 +20,9 @@ const nerve = {
   setOverlayExpanded: (expanded: boolean): Promise<void> => ipcRenderer.invoke("nerve:setOverlayExpanded", expanded),
   openMain: (route?: string): Promise<void> => ipcRenderer.invoke("nerve:openMain", route),
   openScreenshotFolder: (): Promise<string> => ipcRenderer.invoke("nerve:openScreenshotFolder"),
+  getSessions: (): Promise<SessionSummaryRecord[]> => ipcRenderer.invoke("nerve:getSessions"),
+  pauseSession: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:pauseSession"),
+  resumeSession: (sessionId?: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:resumeSession", sessionId),
   endSession: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:endSession"),
   updateSession: (sessionId: string, patch: { goal?: string; deadlineText?: string }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateSession", sessionId, patch),

@@ -1,16 +1,13 @@
 import {
   analyzeScreenOutputSchema,
-  atomizeStepOutputSchema,
   generatePlanOutputSchema,
   parseJsonObject
 } from "./aiSchema.js";
-import { atomizePrompt, planPrompt, screenAnalysisPrompt } from "./prompts.js";
+import { planPrompt, screenAnalysisPrompt } from "./prompts.js";
 import type {
   AIProvider,
   AnalyzeScreenInput,
   AnalyzeScreenOutput,
-  AtomizeStepInput,
-  AtomizeStepOutput,
   GeneratePlanInput,
   GeneratePlanOutput,
   TaskType
@@ -183,7 +180,7 @@ const defaultPlan = (input: GeneratePlanInput): GeneratePlanOutput => ({
   }))
 });
 
-function normalizeScopes(input: Pick<GeneratePlanInput | AnalyzeScreenInput | AtomizeStepInput, "taskType"> & { taskTypes?: TaskType[]; sessionTaskTypes?: TaskType[] }) {
+function normalizeScopes(input: Pick<GeneratePlanInput | AnalyzeScreenInput, "taskType"> & { taskTypes?: TaskType[]; sessionTaskTypes?: TaskType[] }) {
   const scopes = input.taskTypes ?? input.sessionTaskTypes ?? [input.taskType];
   const valid = scopes.filter((scope) => scope !== "Mixed work");
   return valid.length ? valid : [input.taskType === "Mixed work" ? "General writing" : input.taskType];
@@ -300,7 +297,9 @@ function compactActivityPlan(input: GeneratePlanInput, output: GeneratePlanOutpu
         explanation: existing.explanation || step.explanation,
         dueAt: existing.dueAt || step.dueAt,
         reminderAt: existing.reminderAt || step.reminderAt,
-        deadlineText: existing.deadlineText || step.deadlineText
+        deadlineText: existing.deadlineText || step.deadlineText,
+        routineIntervalMinutes: existing.routineIntervalMinutes || step.routineIntervalMinutes,
+        routineNextAt: existing.routineNextAt || step.routineNextAt
       });
     }
   }
@@ -347,11 +346,6 @@ function booleanValue(value: unknown, fallback = false) {
   return fallback;
 }
 
-function integerValue(value: unknown, fallback: number) {
-  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
-  return Number.isFinite(parsed) ? Math.trunc(parsed) : fallback;
-}
-
 function enumValue<T extends readonly string[]>(value: unknown, allowed: T, fallback: T[number]): T[number] {
   const normalized = stringValue(value).toLowerCase().replace(/[\s-]+/g, "_");
   return allowed.find((item) => item.toLowerCase() === normalized || item.toLowerCase().replace(/[\s-]+/g, "_") === normalized) ?? fallback;
@@ -395,7 +389,9 @@ function parsePlanContent(content: string, input: GeneratePlanInput): GeneratePl
             taskType: pickValue(step, ["taskType", "task_type", "type", "scope", "category"]) ?? input.taskType,
             deadlineText: stringValue(pickValue(step, ["deadlineText", "deadline_text", "deadline", "dueText", "due_text"])),
             dueAt: pickValue(step, ["dueAt", "due_at", "due", "deadlineAt", "deadline_at"]) ?? null,
-            reminderAt: pickValue(step, ["reminderAt", "reminder_at", "remindAt", "remind_at"]) ?? null
+            reminderAt: pickValue(step, ["reminderAt", "reminder_at", "remindAt", "remind_at"]) ?? null,
+            routineIntervalMinutes: pickValue(step, ["routineIntervalMinutes", "routine_interval_minutes", "repeatIntervalMinutes", "repeat_interval_minutes", "intervalMinutes", "interval_minutes"]) ?? null,
+            routineNextAt: pickValue(step, ["routineNextAt", "routine_next_at", "nextRoutineAt", "next_routine_at", "repeatNextAt", "repeat_next_at"]) ?? null
           };
         })
         .filter(Boolean)
@@ -441,25 +437,6 @@ function parseAnalyzeContent(content: string, input: AnalyzeScreenInput): Analyz
   }
 }
 
-function parseAtomizeContent(content: string, input: AtomizeStepInput): AtomizeStepOutput | null {
-  try {
-    const payload = parseJsonObject(content);
-    const parsed = atomizeStepOutputSchema.safeParse(payload);
-    if (parsed.success) return parsed.data;
-    const root = objectValue(payload);
-    if (!root) return null;
-    const repaired = {
-      nextAction: stringValue(pickValue(root, ["nextAction", "next_action", "action", "smallerAction", "smaller_action"]), input.currentNextAction),
-      explanation: stringValue(pickValue(root, ["explanation", "reason", "why"]), "One smaller physical step is enough."),
-      atomizationLevel: Math.max(input.atomizationLevel + 1, integerValue(pickValue(root, ["atomizationLevel", "atomization_level", "level"]), input.atomizationLevel + 1))
-    };
-    const repairedParsed = atomizeStepOutputSchema.safeParse(repaired);
-    return repairedParsed.success ? repairedParsed.data : null;
-  } catch {
-    return null;
-  }
-}
-
 export class DeepSeekAIProvider implements AIProvider {
   readonly name = "deepseek" as const;
 
@@ -475,7 +452,7 @@ export class DeepSeekAIProvider implements AIProvider {
     const repairContent = await this.chat(
       `${planPrompt(input)}
 
-The previous response did not meet the required contract. Return strict JSON only. If the user's text contains distinct activities, return one row per activity. Every row must include title, nextAction, explanation, taskType, deadlineText, dueAt, and reminderAt. Use null for dueAt/reminderAt when no deadline is known.`
+The previous response did not meet the required contract. Return strict JSON only. If the user's text contains distinct activities, return one row per activity. Every row must include title, nextAction, explanation, taskType, deadlineText, dueAt, reminderAt, routineIntervalMinutes, and routineNextAt. Use null for dueAt/reminderAt/routineIntervalMinutes/routineNextAt when not applicable.`
     );
     const repaired = parsePlanContent(repairContent, input);
     if (repaired) return repaired;
@@ -494,20 +471,6 @@ The previous response did not meet the required contract. Return strict JSON onl
     const repaired = parseAnalyzeContent(repairContent, input);
     if (repaired) return repaired;
     return analyzeScreenOutputSchema.parse(parseJsonObject(repairContent));
-  }
-
-  async atomizeStep(input: AtomizeStepInput): Promise<AtomizeStepOutput> {
-    const content = await this.chat(atomizePrompt(input));
-    const parsed = parseAtomizeContent(content, input);
-    if (parsed) return parsed;
-    const repairContent = await this.chat(
-      `${atomizePrompt(input)}
-
-The previous response did not meet the required contract. Return strict JSON only with nextAction, explanation, and atomizationLevel.`
-    );
-    const repaired = parseAtomizeContent(repairContent, input);
-    if (repaired) return repaired;
-    return atomizeStepOutputSchema.parse(parseJsonObject(repairContent));
   }
 
   private async chat(prompt: string, retries = 1): Promise<string> {

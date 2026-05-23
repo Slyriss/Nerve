@@ -68,6 +68,8 @@ let overlayExpanded = false;
 let overlaySuppressUntil = 0;
 let delayUntil: string | null = null;
 let thinkingPauseUntil: string | null = null;
+let breakReminderAt: string | null = null;
+let breakEndsAt: string | null = null;
 let bannedSiteAlert: BannedSiteAlert | null = null;
 let bannedSiteStrikeCount = 0;
 let lastBannedSiteEventKey: string | null = null;
@@ -81,8 +83,8 @@ let isQuitting = false;
 const overlaySlimWidth = 56;
 const overlayExpandedWidth = 260;
 const overlayBannedWidth = 320;
-const DELAY_MINUTES = 5;
 const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
+const MAX_REMINDER_WAKE_MS = 60_000;
 
 const settingOptions = {
   aiProvider: ["deepseek"],
@@ -91,7 +93,9 @@ const settingOptions = {
   driftThresholdMinutes: [3, 6, 10],
   thinkingPauseMinutes: [3, 5, 10],
   panelOpacity: [0.3, 0.5, 0.8],
-  language: ["en", "zh"]
+  language: ["en", "zh"],
+  breakIntervalMinutes: [15, 25, 30, 45, 60, 90],
+  breakDurationMinutes: [5, 10, 15, 20, 30]
 } as const;
 
 const dataDir = () => path.join(app.getPath("userData"), "NerveData");
@@ -168,6 +172,33 @@ function normalizeTaskScopes(taskTypes: Array<TaskType | undefined>): TaskType[]
   return unique.length ? unique : ["General writing"];
 }
 
+function parseRoutineIntervalMinutes(text: string): number | null {
+  const lower = text.toLowerCase();
+  if (/\b(hourly|every hour)\b/.test(lower)) return 60;
+  if (/\b(half hour|half-hour)\b/.test(lower)) return 30;
+  const match = lower.match(/\b(?:every|each|repeat(?:s|ing)? every)\s+(\d{1,3})\s*(minutes?|mins?|m|hours?|hrs?|h)\b/);
+  if (!match) return null;
+  const amount = Number(match[1]);
+  const unit = match[2];
+  if (!Number.isFinite(amount) || amount <= 0) return null;
+  const minutes = /^h|hour|hr/.test(unit) ? amount * 60 : amount;
+  return minutes >= 1 && minutes <= 24 * 60 ? minutes : null;
+}
+
+function normalizeRoutineInterval(value: unknown, text = ""): number | null {
+  const parsed = typeof value === "number" ? value : typeof value === "string" ? Number.parseInt(value, 10) : Number.NaN;
+  const explicit = Number.isFinite(parsed) ? Math.trunc(parsed) : null;
+  const interval = explicit && explicit > 0 ? explicit : parseRoutineIntervalMinutes(text);
+  return interval && interval >= 1 && interval <= 24 * 60 ? interval : null;
+}
+
+function nextRoutineTime(step: Pick<PlanStepDraft, "routineNextAt" | "reminderAt" | "dueAt">, intervalMinutes: number | null) {
+  if (!intervalMinutes) return null;
+  const explicit = validIso(step.routineNextAt) ?? validIso(step.reminderAt) ?? validIso(step.dueAt);
+  if (explicit) return explicit;
+  return new Date(Date.now() + intervalMinutes * 60_000).toISOString();
+}
+
 function inferTaskScopesFromText(text: string, selected: TaskType[] = []) {
   const selectedScopes = selected.filter((scope) => scope !== "Mixed work");
   const inferred: TaskType[] = [];
@@ -200,24 +231,36 @@ function scopesFromSteps(steps: PlanStepDraft[], fallback: TaskType[]) {
   ]);
 }
 
-function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType): PlanStepDraft[] {
+function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, contextText = ""): PlanStepDraft[] {
   return steps
     .filter((step) => step.title?.trim() && step.nextAction?.trim())
-    .map((step) => ({
-      title: step.title.trim(),
-      nextAction: step.nextAction.trim(),
-      explanation: step.explanation?.trim() || "One small step is enough.",
-      taskType: canonicalTaskType(step.taskType, fallbackTaskType),
-      deadlineText: step.deadlineText?.trim() || "",
-      dueAt: validIso(step.dueAt),
-      reminderAt: validIso(step.reminderAt)
-    }));
+    .map((step) => {
+      const routineText = `${step.title} ${step.nextAction} ${step.explanation ?? ""} ${step.deadlineText ?? ""} ${steps.length === 1 ? contextText : ""}`;
+      const routineIntervalMinutes = normalizeRoutineInterval(
+        step.routineIntervalMinutes,
+        routineText
+      );
+      const routineNextAt = nextRoutineTime(step, routineIntervalMinutes);
+      return {
+        title: step.title.trim(),
+        nextAction: step.nextAction.trim(),
+        explanation: step.explanation?.trim() || "One small step is enough.",
+        taskType: canonicalTaskType(step.taskType, fallbackTaskType),
+        deadlineText: step.deadlineText?.trim() || "",
+        dueAt: validIso(step.dueAt),
+        reminderAt: routineNextAt ?? validIso(step.reminderAt),
+        routineIntervalMinutes,
+        routineNextAt
+      };
+    });
 }
 
-function scheduleTimeForStep(step: Pick<PlanStepDraft, "reminderAt" | "dueAt">) {
+function scheduleTimeForStep(step: Pick<PlanStepDraft, "reminderAt" | "dueAt" | "routineNextAt">) {
+  const routine = step.routineNextAt ? Date.parse(step.routineNextAt) : Number.POSITIVE_INFINITY;
   const reminder = step.reminderAt ? Date.parse(step.reminderAt) : Number.POSITIVE_INFINITY;
   const due = step.dueAt ? Date.parse(step.dueAt) : Number.POSITIVE_INFINITY;
   const firstScheduledTime = Math.min(
+    Number.isFinite(routine) ? routine : Number.POSITIVE_INFINITY,
     Number.isFinite(reminder) ? reminder : Number.POSITIVE_INFINITY,
     Number.isFinite(due) ? due : Number.POSITIVE_INFINITY
   );
@@ -270,13 +313,13 @@ function ensureStorage() {
       next_action TEXT NOT NULL, explanation TEXT NOT NULL, status TEXT NOT NULL, atomization_level INTEGER NOT NULL,
       delay_count INTEGER NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT,
       task_type TEXT NOT NULL DEFAULT 'General writing', deadline_text TEXT NOT NULL DEFAULT '',
-      due_at TEXT, reminder_at TEXT
+      due_at TEXT, reminder_at TEXT, routine_interval_minutes INTEGER, routine_next_at TEXT
     );
     CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, order_index INTEGER NOT NULL, title TEXT NOT NULL,
       task_type TEXT NOT NULL DEFAULT 'General writing', deadline_text TEXT NOT NULL DEFAULT '',
-      due_at TEXT, reminder_at TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-      completed_at TEXT
+      due_at TEXT, reminder_at TEXT, routine_interval_minutes INTEGER, routine_next_at TEXT, status TEXT NOT NULL,
+      created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS guidance_steps (
       id TEXT PRIMARY KEY, activity_id TEXT NOT NULL, session_id TEXT NOT NULL, order_index INTEGER NOT NULL,
@@ -290,6 +333,7 @@ function ensureStorage() {
     );
     CREATE TABLE IF NOT EXISTS ai_observations (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, screenshot_id TEXT, provider TEXT NOT NULL, model TEXT NOT NULL,
+      step_id TEXT,
       user_state TEXT NOT NULL, task_relevance TEXT NOT NULL, progress_state TEXT NOT NULL, active_app TEXT NOT NULL,
       active_context TEXT NOT NULL, visible_change_summary TEXT NOT NULL, concise_explanation TEXT NOT NULL,
       suggested_next_action TEXT NOT NULL, suggested_step_complete INTEGER NOT NULL, should_intervene INTEGER NOT NULL,
@@ -355,6 +399,11 @@ function ensureStorage() {
   ensureColumn("steps", "deadline_text", "TEXT NOT NULL DEFAULT ''");
   ensureColumn("steps", "due_at", "TEXT");
   ensureColumn("steps", "reminder_at", "TEXT");
+  ensureColumn("steps", "routine_interval_minutes", "INTEGER");
+  ensureColumn("steps", "routine_next_at", "TEXT");
+  ensureColumn("activities", "routine_interval_minutes", "INTEGER");
+  ensureColumn("activities", "routine_next_at", "TEXT");
+  ensureColumn("ai_observations", "step_id", "TEXT");
   ensureColumn("ai_observations", "detected_task_type", "TEXT");
   migrateLegacyStepsToActivities();
   for (const [key, value] of Object.entries(defaultSettings)) {
@@ -498,6 +547,8 @@ function rowStep(row: any): StepRecord {
     deadlineText: row.deadline_text || "",
     dueAt: row.due_at,
     reminderAt: row.reminder_at,
+    routineIntervalMinutes: row.routine_interval_minutes,
+    routineNextAt: row.routine_next_at,
     status: row.status,
     atomizationLevel: row.atomization_level,
     delayCount: row.delay_count,
@@ -517,6 +568,8 @@ function rowActivity(row: any): ActivityRecord {
     deadlineText: row.deadline_text || "",
     dueAt: row.due_at,
     reminderAt: row.reminder_at,
+    routineIntervalMinutes: row.routine_interval_minutes,
+    routineNextAt: row.routine_next_at,
     status: row.status,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
@@ -553,6 +606,8 @@ function rowActivityProjection(row: any): StepRecord {
     deadlineText: row.deadline_text || "",
     dueAt: row.due_at,
     reminderAt: row.reminder_at,
+    routineIntervalMinutes: row.routine_interval_minutes,
+    routineNextAt: row.routine_next_at,
     status: row.status,
     atomizationLevel: row.atomization_level ?? 0,
     delayCount: row.delay_count ?? 0,
@@ -597,6 +652,7 @@ function rowObservation(row: any): AIObservationRecord {
     id: row.id,
     sessionId: row.session_id,
     screenshotId: row.screenshot_id,
+    stepId: row.step_id,
     provider: row.provider,
     model: row.model,
     userState: row.user_state,
@@ -827,6 +883,7 @@ function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
   }
   cachedSettings = null;
   resetCaptureLoop();
+  resetReminderLoop();
   broadcast();
   return getSettings();
 }
@@ -1026,20 +1083,72 @@ function getActiveGuidanceStep(activityId: string): GuidanceStepRecord | null {
   return row ? rowGuidanceStep(row) : null;
 }
 
+function setActiveActivity(sessionId: string, activityId: string) {
+  const target = db.prepare("SELECT * FROM activities WHERE id = ? AND session_id = ? AND status != 'complete'").get(activityId, sessionId) as any;
+  if (!target) return getActiveStep(sessionId);
+  const timestamp = now();
+  db.prepare("UPDATE activities SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active' AND id != ?").run(
+    timestamp,
+    sessionId,
+    activityId
+  );
+  db.prepare("UPDATE guidance_steps SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active' AND activity_id != ?").run(
+    timestamp,
+    sessionId,
+    activityId
+  );
+  db.prepare("UPDATE activities SET status = 'active', completed_at = NULL, updated_at = ? WHERE id = ?").run(timestamp, activityId);
+  const guidance = getActiveGuidanceStep(activityId);
+  if (guidance) {
+    db.prepare("UPDATE guidance_steps SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, guidance.id);
+  }
+  clearDelayTimer();
+  thinkingPauseUntil = null;
+  addTaskHistory(
+    sessionId,
+    (target.task_type || "General writing") as TaskType,
+    "step_active",
+    "high",
+    `Active step changed: ${target.title}`,
+    { stepId: target.id }
+  );
+  return getActiveStep(sessionId);
+}
+
+function ensureHighestPriorityActive(sessionId: string) {
+  const rows = db
+    .prepare("SELECT * FROM activities WHERE session_id = ? AND status IN ('active', 'pending') ORDER BY order_index")
+    .all(sessionId) as any[];
+  if (rows.length === 0) return activateNextPendingStep(sessionId);
+  const firstReady = rows.find(isRoutineReady);
+  if (!firstReady) {
+    const active = rows.find((row) => row.status === "active");
+    if (active) {
+      const timestamp = now();
+      db.prepare("UPDATE activities SET status = 'pending', updated_at = ? WHERE id = ?").run(timestamp, active.id);
+      db.prepare("UPDATE guidance_steps SET status = 'pending', updated_at = ? WHERE activity_id = ? AND status = 'active'").run(timestamp, active.id);
+    }
+    return null;
+  }
+  if (firstReady.status === "active") return getActiveStep(sessionId);
+  return setActiveActivity(sessionId, firstReady.id);
+}
+
 function activateNextPendingStep(sessionId: string, afterOrderIndex = -1) {
   const timestamp = now();
-  const nextStep = db
+  const nextSteps = db
     .prepare(
       `SELECT * FROM activities
        WHERE session_id = ? AND status = 'pending' AND order_index > ?
-       ORDER BY order_index LIMIT 1`
+       ORDER BY order_index`
     )
-    .get(sessionId, afterOrderIndex) as any;
+    .all(sessionId, afterOrderIndex) as any[];
+  const nextStep = nextSteps.find(isRoutineReady);
   const fallbackStep =
     nextStep ??
     (db
-      .prepare("SELECT * FROM activities WHERE session_id = ? AND status = 'pending' ORDER BY order_index LIMIT 1")
-      .get(sessionId) as any);
+      .prepare("SELECT * FROM activities WHERE session_id = ? AND status = 'pending' ORDER BY order_index")
+      .all(sessionId) as any[]).find(isRoutineReady);
   if (fallbackStep) {
     db.prepare("UPDATE activities SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, fallbackStep.id);
     db.prepare(`UPDATE guidance_steps SET status = 'active', updated_at = ? WHERE id = (
@@ -1055,6 +1164,10 @@ function activateNextPendingStep(sessionId: string, afterOrderIndex = -1) {
     );
     return getActiveStep(sessionId);
   }
+  const hasFutureRoutine = (db
+    .prepare("SELECT * FROM activities WHERE session_id = ? AND status = 'pending' ORDER BY order_index")
+    .all(sessionId) as any[]).some((row) => !isRoutineReady(row));
+  if (hasFutureRoutine) return null;
   db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, sessionId);
   if (activeSessionId === sessionId) stopSessionLoops();
   return null;
@@ -1113,12 +1226,47 @@ function reminderAtForStep(step: Pick<StepRecord, "dueAt" | "reminderAt">) {
   return new Date(Date.parse(due) - 30 * 60_000).toISOString();
 }
 
+function isRoutineStep(step: Pick<StepRecord, "routineIntervalMinutes"> | any) {
+  return Number(step.routineIntervalMinutes ?? step.routine_interval_minutes ?? 0) > 0;
+}
+
+function isRoutineReady(row: any) {
+  if (!isRoutineStep(row)) return true;
+  const nextAt = row.routineNextAt ?? row.routine_next_at;
+  return !nextAt || Date.parse(nextAt) <= Date.now();
+}
+
+function nextRoutineOccurrence(step: Pick<StepRecord, "routineNextAt" | "routineIntervalMinutes">) {
+  const interval = Number(step.routineIntervalMinutes ?? 0);
+  if (!interval) return null;
+  return new Date(Date.now() + interval * 60_000).toISOString();
+}
+
+function moveActivityToTop(sessionId: string, activityId: string) {
+  const row = db.prepare("SELECT order_index FROM activities WHERE id = ? AND session_id = ?").get(activityId, sessionId) as { order_index: number } | undefined;
+  if (!row || row.order_index === 0) return;
+  const timestamp = now();
+  db.prepare("UPDATE activities SET order_index = order_index + 1, updated_at = ? WHERE session_id = ? AND id != ? AND order_index < ?").run(
+    timestamp,
+    sessionId,
+    activityId,
+    row.order_index
+  );
+  db.prepare("UPDATE activities SET order_index = 0, updated_at = ? WHERE id = ?").run(timestamp, activityId);
+}
+
 function syncStepReminder(step: StepRecord) {
   db.prepare("DELETE FROM reminders WHERE step_id = ? AND status = 'scheduled'").run(step.id);
-  const reminderAt = reminderAtForStep(step);
+  if (step.status === "complete") return;
+  const routineTimes = [validIso(step.reminderAt), validIso(step.routineNextAt)]
+    .filter((value): value is string => Boolean(value))
+    .sort((a, b) => Date.parse(a) - Date.parse(b));
+  const routineReminderAt = step.routineIntervalMinutes ? routineTimes[0] ?? null : null;
+  const reminderAt = routineReminderAt ?? reminderAtForStep(step);
   if (!reminderAt) return;
   const dueAt = validIso(step.dueAt);
   const deadlineText = step.deadlineText || (dueAt ? new Date(dueAt).toLocaleString() : "");
+  const routine = Boolean(routineReminderAt);
   db.prepare(`INSERT INTO reminders (
     id, session_id, step_id, task_type, title, message, deadline_text, due_at, reminder_at, status, created_at, triggered_at
   ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'scheduled', ?, NULL)`).run(
@@ -1127,7 +1275,7 @@ function syncStepReminder(step: StepRecord) {
     step.id,
     step.taskType,
     step.title,
-    `Next up: ${step.nextAction}`,
+    routine ? `Routine check: ${step.nextAction}` : `Next up: ${step.nextAction}`,
     deadlineText,
     dueAt,
     reminderAt,
@@ -1202,7 +1350,7 @@ function activateReminderStep(reminder: ReminderRecord) {
 
 function checkReminders() {
   const session = getCurrentActiveSession();
-  if (!session) return;
+  if (!session) return false;
   const timestamp = now();
   const rows = db
     .prepare(`SELECT r.* FROM reminders r JOIN sessions s ON s.id = r.session_id WHERE r.status = 'scheduled' AND r.reminder_at <= ? AND s.status = 'active' AND r.session_id = ? ORDER BY r.reminder_at LIMIT 10`)
@@ -1210,32 +1358,66 @@ function checkReminders() {
   for (const row of rows) {
     const reminder = rowReminder(row);
     db.prepare("UPDATE reminders SET status = 'triggered', triggered_at = ? WHERE id = ?").run(timestamp, reminder.id);
+    const reminderStep = reminder.stepId ? getSteps(reminder.sessionId).find((step) => step.id === reminder.stepId) : null;
+    const routineReminder = Boolean(reminderStep?.routineIntervalMinutes);
     addEvent(reminder.sessionId, "deadline_reminder_triggered", reminder.title, {
+      title: reminder.title,
       stepId: reminder.stepId,
       taskType: reminder.taskType,
       dueAt: reminder.dueAt,
-      reminderAt: reminder.reminderAt
+      reminderAt: reminder.reminderAt,
+      routine: routineReminder
     });
     if (Notification.isSupported()) {
       const notification = new Notification({
-        title: "Nerve reminder",
+        title: routineReminder ? "Nerve routine" : "Nerve reminder",
         body: reminder.dueAt ? `${reminder.title} is due ${new Date(reminder.dueAt).toLocaleTimeString()}. ${reminder.message}` : reminder.message,
         silent: false
       });
       notification.on("click", () => createMainWindow("/log"));
       notification.show();
     }
+    if (reminderStep?.routineIntervalMinutes && reminder.stepId) {
+      moveActivityToTop(reminder.sessionId, reminder.stepId);
+      const activeAfter = setActiveActivity(reminder.sessionId, reminder.stepId);
+      if (activeAfter) {
+        addEvent(reminder.sessionId, "routine_promoted", `Routine is due now: ${activeAfter.title}.`, { stepId: activeAfter.id });
+      }
+    }
     overlayExpanded = true;
   }
-  if (rows.length > 0) broadcast();
+  const breakChanged = checkBreakReminders();
+  if (rows.length > 0 || breakChanged) broadcast();
+  return rows.length > 0 || breakChanged;
+}
+
+function nextReminderWakeDelay(sessionId: string) {
+  const wakeTimes: number[] = [];
+  const nextReminder = db
+    .prepare("SELECT reminder_at FROM reminders WHERE session_id = ? AND status = 'scheduled' ORDER BY reminder_at LIMIT 1")
+    .get(sessionId) as { reminder_at: string } | undefined;
+  for (const value of [nextReminder?.reminder_at, breakEndsAt, breakReminderAt]) {
+    if (!value) continue;
+    const parsed = Date.parse(value);
+    if (Number.isFinite(parsed)) wakeTimes.push(parsed);
+  }
+  if (wakeTimes.length === 0) return MAX_REMINDER_WAKE_MS;
+  const soonest = Math.min(...wakeTimes);
+  return Math.min(MAX_REMINDER_WAKE_MS, Math.max(0, soonest - Date.now()));
 }
 
 function resetReminderLoop() {
-  if (reminderTimer) clearInterval(reminderTimer);
+  if (reminderTimer) clearTimeout(reminderTimer);
   reminderTimer = null;
-  if (!getCurrentActiveSession()) return;
-  reminderTimer = setInterval(checkReminders, 30_000);
+  const session = getCurrentActiveSession();
+  if (!session) {
+    clearBreakSchedule();
+    return;
+  }
   checkReminders();
+  const active = getCurrentActiveSession();
+  if (!active) return;
+  reminderTimer = setTimeout(resetReminderLoop, nextReminderWakeDelay(active.id));
 }
 
 function provider(settings = getSettings()): AIProvider {
@@ -1430,8 +1612,9 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
 
     const elapsedOnStep = Math.round((Date.now() - Date.parse(activeStep.updatedAt)) / 1000);
     const elapsedInApp = currentBreadcrumbStartedAt ? Math.round((Date.now() - Date.parse(currentBreadcrumbStartedAt)) / 1000) : 0;
-    const thinkingActive = Boolean(thinkingPauseUntil && Date.parse(thinkingPauseUntil) > Date.now());
-    const delayExpired = Boolean(delayUntil && Date.parse(delayUntil) <= Date.now());
+    const breakActive = Boolean(breakEndsAt && Date.parse(breakEndsAt) > Date.now());
+    const thinkingActive = breakActive || Boolean(thinkingPauseUntil && Date.parse(thinkingPauseUntil) > Date.now());
+    if (delayUntil && Date.parse(delayUntil) <= Date.now()) delayUntil = null;
 
     const analyzeInput: AnalyzeScreenInput = {
       sessionGoal: session.goal,
@@ -1472,6 +1655,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
 
     observation = {
       ...observation,
+      stepId: activeStep.id,
       suggestedNextAction: ensurePhysicalAction(observation.suggestedNextAction, activeStep.nextAction)
     };
     addTaskHistory(
@@ -1485,20 +1669,19 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
 
     const stuckReached = observation.userState === "stuck" && elapsedOnStep >= settings.stuckThresholdMinutes * 60 && !thinkingActive;
     const driftReached = observation.userState === "unproductive_drift" && elapsedInApp >= settings.driftThresholdMinutes * 60 && !thinkingActive;
-    if (stuckReached || driftReached || delayExpired || observation.shouldIntervene) {
+    if (stuckReached || driftReached || (observation.shouldIntervene && !thinkingActive)) {
       const expanded = expandOverlayFromSystem();
-      if (delayExpired) delayUntil = null;
       if (expanded) {
         addEvent(session.id, "step_shown", observation.conciseExplanation, { interventionType: observation.interventionType });
       }
     }
 
     db.prepare(`INSERT INTO ai_observations (
-      id, session_id, screenshot_id, provider, model, user_state, task_relevance, progress_state, active_app,
+      id, session_id, screenshot_id, step_id, provider, model, user_state, task_relevance, progress_state, active_app,
       active_context, visible_change_summary, concise_explanation, suggested_next_action, suggested_step_complete,
       should_intervene, intervention_type, urgency, breadcrumb_relevance, detected_task_type, raw_json, created_at
-    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      id(), session.id, screenshotId,
+    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
+      id(), session.id, screenshotId, activeStep.id,
       analysisService.providerName,
       settings.aiProvider === "deepseek" ? settings.deepseekModel : "mock",
       observation.userState, observation.taskRelevance, observation.progressState, activeApp,
@@ -1577,7 +1760,7 @@ function clearDelayTimer() {
 }
 
 function clearReminderLoop() {
-  if (reminderTimer) clearInterval(reminderTimer);
+  if (reminderTimer) clearTimeout(reminderTimer);
   reminderTimer = null;
 }
 
@@ -1586,6 +1769,7 @@ function stopSessionLoops() {
   captureService = null;
   clearDelayTimer();
   clearReminderLoop();
+  clearBreakSchedule();
   finishCurrentBreadcrumb();
 }
 
@@ -1630,6 +1814,8 @@ function snapshot(): AppSnapshot {
     overlayExpanded,
     delayUntil,
     thinkingPauseUntil,
+    breakReminderAt,
+    breakEndsAt,
     bannedSiteAlert,
     bannedSiteStrikeCount,
     screenshotFolder: screenshotDir(),
@@ -1821,7 +2007,7 @@ function registerIpc() {
       activeApp: activeWindow.activeApp,
       windowTitle: activeWindow.windowTitle
     });
-    const steps = sortPlanStepsBySchedule(normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType));
+    const steps = sortPlanStepsBySchedule(normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType, goal));
     if (steps.length === 0) {
       throw new Error("DeepSeek did not return any usable tasks.");
     }
@@ -1995,7 +2181,7 @@ function registerIpc() {
       throw new Error("A goal is required.");
     }
     const requestedTaskTypes = inferTaskScopesFromText(goal, input.taskTypes ?? (input.taskType ? [input.taskType] : []));
-    const parsedSteps = input.parsedSteps?.length ? normalizePlanSteps(input.parsedSteps, requestedTaskTypes[0]) : [];
+    const parsedSteps = input.parsedSteps?.length ? normalizePlanSteps(input.parsedSteps, requestedTaskTypes[0], goal) : [];
     const taskTypes = parsedSteps.length ? scopesFromSteps(parsedSteps, requestedTaskTypes) : requestedTaskTypes;
     const taskType = taskTypes.length > 1 ? "Mixed work" : taskTypes[0];
     const timestamp = now();
@@ -2014,6 +2200,7 @@ function registerIpc() {
           activeApp: activeWindow.activeApp,
           windowTitle: activeWindow.windowTitle
         });
+    const planSteps = sortPlanStepsBySchedule(normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal));
 
     stopSessionLoops();
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status IN ('active', 'paused')").run(timestamp, timestamp);
@@ -2027,9 +2214,9 @@ function registerIpc() {
       timestamp,
       timestamp
     );
-    const insertActivity = db.prepare("INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)");
+    const insertActivity = db.prepare("INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, routine_interval_minutes, routine_next_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)");
     const insertGuidance = db.prepare("INSERT INTO guidance_steps (id, activity_id, session_id, order_index, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, NULL)");
-    plan.steps.forEach((step: PlanStepDraft, index: number) => {
+    planSteps.forEach((step: PlanStepDraft, index: number) => {
       const activityId = id();
       insertActivity.run(
         activityId,
@@ -2040,6 +2227,8 @@ function registerIpc() {
         step.deadlineText ?? "",
         validIso(step.dueAt),
         validIso(step.reminderAt),
+        step.routineIntervalMinutes ?? null,
+        validIso(step.routineNextAt),
         index === 0 ? "active" : "pending",
         timestamp,
         timestamp
@@ -2048,6 +2237,7 @@ function registerIpc() {
     });
     for (const step of getSteps(sessionId)) syncStepReminder(step);
     activeSessionId = sessionId;
+    ensureHighestPriorityActive(sessionId);
     overlayExpanded = false;
     overlaySuppressUntil = 0;
     delayUntil = null;
@@ -2185,20 +2375,22 @@ function registerIpc() {
     const nextIdx = (maxRow.m ?? -1) + 1;
 
     const insertActivity = db.prepare(
-      "INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL)"
+      "INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, routine_interval_minutes, routine_next_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL)"
     );
     const insertGuidance = db.prepare(
       "INSERT INTO guidance_steps (id, activity_id, session_id, order_index, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, 0, ?, ?, 'pending', 0, 0, ?, ?, NULL)"
     );
 
-    plan.steps.forEach((step: PlanStepDraft, index: number) => {
+    const planSteps = normalizePlanSteps(plan.steps, session.taskType, session.goal);
+    planSteps.forEach((step: PlanStepDraft, index: number) => {
       const activityId = id();
-      insertActivity.run(activityId, session.id, nextIdx + index, step.title, step.taskType ?? session.taskType, step.deadlineText ?? "", validIso(step.dueAt), validIso(step.reminderAt), timestamp, timestamp);
+      insertActivity.run(activityId, session.id, nextIdx + index, step.title, step.taskType ?? session.taskType, step.deadlineText ?? "", validIso(step.dueAt), validIso(step.reminderAt), step.routineIntervalMinutes ?? null, validIso(step.routineNextAt), timestamp, timestamp);
       insertGuidance.run(id(), activityId, session.id, step.nextAction, step.explanation, timestamp, timestamp);
     });
 
     if (!getActiveStep(session.id)) activateNextPendingStep(session.id);
     for (const step of getSteps(session.id)) syncStepReminder(step);
+    resetReminderLoop();
 
     addEvent(session.id, "replan", `Plan regenerated: ${plan.steps.length} new steps added.`, {
       completedCount: completedActivities.length
@@ -2217,32 +2409,38 @@ function registerIpc() {
       deadlineText: "deadline_text",
       dueAt: "due_at",
       reminderAt: "reminder_at",
+      routineIntervalMinutes: "routine_interval_minutes",
+      routineNextAt: "routine_next_at",
       status: "status",
       orderIndex: "order_index"
     } as const;
     for (const key of Object.keys(activityColumnMap) as Array<keyof typeof activityColumnMap>) {
       if (patch[key] !== undefined) {
         const column = activityColumnMap[key];
-        if (key === "status" && patch.status === "active") {
-          db.prepare("UPDATE activities SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active'").run(
-            now(),
-            existing.session_id
-          );
-        }
-        const value = key === "dueAt" || key === "reminderAt" ? validIso(patch[key] as string | null | undefined) : patch[key];
+        const value =
+          key === "dueAt" || key === "reminderAt" || key === "routineNextAt"
+            ? validIso(patch[key] as string | null | undefined)
+            : key === "routineIntervalMinutes"
+              ? normalizeRoutineInterval(patch[key], "")
+              : patch[key];
         db.prepare(`UPDATE activities SET ${column} = ?, updated_at = ? WHERE id = ?`).run(value, now(), stepId);
       }
     }
-    if (patch.status === "active") {
-      const timestamp = now();
-      db.prepare("UPDATE guidance_steps SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active'").run(
-        timestamp,
-        existing.session_id
+    if (patch.routineIntervalMinutes === null || patch.routineIntervalMinutes === 0) {
+      db.prepare("UPDATE activities SET routine_next_at = NULL, updated_at = ? WHERE id = ?").run(now(), stepId);
+    } else if (patch.routineIntervalMinutes !== undefined && patch.routineNextAt === undefined) {
+      const refreshed = db.prepare("SELECT * FROM activities WHERE id = ?").get(stepId) as any;
+      const interval = normalizeRoutineInterval(refreshed?.routine_interval_minutes, "");
+      const routineNextAt = interval ? new Date(Date.now() + interval * 60_000).toISOString() : null;
+      db.prepare("UPDATE activities SET routine_next_at = ?, reminder_at = ?, updated_at = ? WHERE id = ?").run(
+        routineNextAt,
+        routineNextAt,
+        now(),
+        stepId
       );
-      const nextGuidance = getActiveGuidanceStep(stepId);
-      if (nextGuidance) {
-        db.prepare("UPDATE guidance_steps SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, nextGuidance.id);
-      }
+    }
+    if (patch.status === "active") {
+      setActiveActivity(existing.session_id, stepId);
     }
     if (patch.status === "complete") {
       const timestamp = now();
@@ -2260,7 +2458,10 @@ function registerIpc() {
       db.prepare("UPDATE guidance_steps SET explanation = ?, updated_at = ? WHERE id = ?").run(patch.explanation, now(), guidance.id);
     }
     const refreshed = getActiveStep(existing.session_id) ?? getSteps(existing.session_id).find((step) => step.id === stepId);
-    if (refreshed) syncStepReminder(refreshed);
+    if (refreshed) {
+      syncStepReminder(refreshed);
+      resetReminderLoop();
+    }
     if (existing.status === "active" && patch.status === "complete") {
       db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
       activateNextPendingStep(existing.session_id, existing.order_index);
@@ -2304,6 +2505,7 @@ function registerIpc() {
       db.prepare("DELETE FROM activities WHERE id = ?").run(stepId);
       db.prepare("DELETE FROM guidance_steps WHERE activity_id = ?").run(stepId);
       db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
+      resetReminderLoop();
       addEvent(step.session_id, "step_deleted", "A plan step was deleted.", { title: step.title });
       if (step.status === "active") {
         activateNextPendingStep(step.session_id, step.order_index);
@@ -2316,20 +2518,34 @@ function registerIpc() {
   ipcMain.handle("nerve:reorderStep", (_event, stepId: string, direction: "up" | "down") => {
     const step = db.prepare("SELECT * FROM activities WHERE id = ?").get(stepId) as any;
     if (!step) return snapshot();
+    const activeBefore = getActiveStep(step.session_id);
     const other = db
       .prepare(`SELECT * FROM activities WHERE session_id = ? AND order_index ${direction === "up" ? "<" : ">"} ? ORDER BY order_index ${direction === "up" ? "DESC" : "ASC"} LIMIT 1`)
       .get(step.session_id, step.order_index) as any;
     if (other) {
-      db.prepare("UPDATE activities SET order_index = ? WHERE id = ?").run(other.order_index, step.id);
-      db.prepare("UPDATE activities SET order_index = ? WHERE id = ?").run(step.order_index, other.id);
+      const timestamp = now();
+      db.prepare("UPDATE activities SET order_index = ?, updated_at = ? WHERE id = ?").run(other.order_index, timestamp, step.id);
+      db.prepare("UPDATE activities SET order_index = ?, updated_at = ? WHERE id = ?").run(step.order_index, timestamp, other.id);
+      const activeAfter = ensureHighestPriorityActive(step.session_id);
+      if (activeAfter && activeAfter.id !== activeBefore?.id) {
+        addEvent(step.session_id, "step_reprioritized", `Priority changed. Now focusing on ${activeAfter.title}.`, {
+          stepId: activeAfter.id,
+          previousStepId: activeBefore?.id ?? null
+        });
+      }
     }
     broadcast();
     return snapshot();
   });
 
-  ipcMain.handle("nerve:action", async (_event, action: "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking") => {
+  ipcMain.handle("nerve:action", async (_event, action: "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak") => {
     const session = getCurrentActiveSession();
     if (!session) return snapshot();
+    if (action === "endBreak") {
+      if (breakEndsAt) finishBreak(session, true);
+      broadcast();
+      return snapshot();
+    }
     const step = getActiveStep(session.id);
     if (!step) return snapshot();
     const timestamp = now();
@@ -2345,7 +2561,7 @@ function registerIpc() {
         addEvent(session.id, "guidance_done", "Nice. The next small action is ready.", { stepId: step.id, guidanceId: nextGuidance.id });
       } else {
         db.prepare("UPDATE activities SET status = 'complete', completed_at = ?, updated_at = ? WHERE id = ?").run(timestamp, timestamp, step.id);
-        db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(step.id);
+        db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status IN ('scheduled', 'triggered')").run(step.id);
         const nextStep = activateNextPendingStep(session.id, step.orderIndex);
         if (nextStep) {
           addEvent(session.id, "step_done", "Activity marked done. Moving to the next activity.", { stepId: step.id });
@@ -2354,61 +2570,44 @@ function registerIpc() {
         }
       }
       overlayExpanded = true;
+      resetReminderLoop();
     }
 
     if (action === "thinking") {
-      const minutes = getSettings().thinkingPauseMinutes;
-      thinkingPauseUntil = new Date(Date.now() + minutes * 60_000).toISOString();
-      addEvent(session.id, "thinking_clicked", "Got it. I’ll hold this step while you think.", { until: thinkingPauseUntil });
-      overlayExpanded = true;
-    }
-
-    if (action === "delay") {
-      delayUntil = new Date(Date.now() + DELAY_MINUTES * 60_000).toISOString();
-      if (delayTimer) clearTimeout(delayTimer);
-      delayTimer = setTimeout(() => {
-        const current = getCurrentSession();
-        if (!current || current.status !== "active") return;
-        expandOverlayFromSystem();
-        delayUntil = null;
-        addEvent(current.id, "delay_expired", "Five minutes finished. The next step is still here.");
-        broadcast();
-      }, DELAY_MINUTES * 60_000);
-      const guidance = getActiveGuidanceStep(step.id);
-      if (guidance) {
-        db.prepare("UPDATE guidance_steps SET delay_count = delay_count + 1, updated_at = ? WHERE id = ?").run(timestamp, guidance.id);
+      const activeUntil = thinkingPauseUntil ? Date.parse(thinkingPauseUntil) : 0;
+      if (activeUntil > Date.now()) {
+        thinkingPauseUntil = null;
+        addEvent(session.id, "thinking_cancelled", "Thinking pause ended. Back to the current step.");
+      } else {
+        const minutes = getSettings().thinkingPauseMinutes;
+        clearDelayTimer();
+        thinkingPauseUntil = new Date(Date.now() + minutes * 60_000).toISOString();
+        addEvent(session.id, "thinking_clicked", "Got it. I’ll hold this step while you think.", { until: thinkingPauseUntil });
       }
-      addEvent(session.id, "delay_clicked", "Five more minutes started.", { until: delayUntil });
       overlayExpanded = true;
     }
 
-    if (action === "atomize") {
-      try {
-        const guidance = getActiveGuidanceStep(step.id);
-        const smaller = await analysisService.atomizeStep({
-          goal: session.goal,
-          taskType: step.taskType,
-          sessionTaskTypes: session.taskTypes,
-          language: getSettings().language,
-          currentStepTitle: step.title,
-          currentNextAction: guidance?.nextAction ?? step.nextAction,
-          atomizationLevel: guidance?.atomizationLevel ?? step.atomizationLevel,
-          delayCount: guidance?.delayCount ?? step.delayCount
+    if (action === "repeatRoutine") {
+      if (step.routineIntervalMinutes) {
+        const nextAt = nextRoutineOccurrence(step);
+        db.prepare("UPDATE activities SET status = 'pending', routine_next_at = ?, reminder_at = ?, completed_at = NULL, updated_at = ? WHERE id = ?").run(
+          nextAt,
+          nextAt,
+          timestamp,
+          step.id
+        );
+        db.prepare("UPDATE guidance_steps SET status = 'pending', completed_at = NULL, updated_at = ? WHERE activity_id = ?").run(timestamp, step.id);
+        db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status IN ('scheduled', 'triggered')").run(step.id);
+        const refreshed = getSteps(session.id).find((candidate) => candidate.id === step.id);
+        if (refreshed) syncStepReminder(refreshed);
+        addEvent(session.id, "routine_repeated", `Routine scheduled again for ${nextAt ? new Date(nextAt).toLocaleTimeString() : "later"}.`, {
+          stepId: step.id,
+          nextAt
         });
-        if (guidance) {
-          db.prepare("UPDATE guidance_steps SET next_action = ?, explanation = ?, atomization_level = ?, updated_at = ? WHERE id = ?").run(
-            smaller.nextAction,
-            smaller.explanation,
-            smaller.atomizationLevel,
-            timestamp,
-            guidance.id
-          );
-        }
-        addEvent(session.id, "step_atomized", "The next action was made smaller.", { ...smaller });
-      } catch (error) {
-        addEvent(session.id, "provider_error", "DeepSeek could not make the step smaller. Check the API key, model, or network connection.", { error: String(error) });
+        activateNextPendingStep(session.id, step.orderIndex);
+        resetReminderLoop();
+        overlayExpanded = true;
       }
-      overlayExpanded = true;
     }
 
     if (action === "keepWorking") {
@@ -2494,8 +2693,8 @@ async function runSmokeTest() {
       const thinking = await window.nerve.action("thinking");
       if (!thinking.thinkingPauseUntil) throw new Error("Thinking pause was not set.");
 
-      const delayed = await window.nerve.action("delay");
-      if (!delayed.delayUntil) throw new Error("Delay countdown was not set.");
+      const thinkingCancelled = await window.nerve.action("thinking");
+      if (thinkingCancelled.thinkingPauseUntil) throw new Error("Thinking pause did not cancel.");
 
       const paused = await window.nerve.pauseSession();
       if (paused.session?.status !== "paused") throw new Error("Pause did not mark the session paused.");
@@ -2507,14 +2706,6 @@ async function runSmokeTest() {
       const resumed = await window.nerve.resumeSession();
       if (resumed.session?.status !== "active") throw new Error("Resume did not reactivate the session.");
       if (!resumed.activeStep) throw new Error("Resume lost the active step.");
-
-      const atomized = await window.nerve.action("atomize");
-      if (!atomized.activeStep) {
-        throw new Error("Atomize lost the active step.");
-      }
-      if (atomized.activeStep.atomizationLevel < 1 && !atomized.events.some((event) => event.type === "provider_error")) {
-        throw new Error("Atomize neither updated the step nor logged a provider issue.");
-      }
 
       const advanced = await window.nerve.action("done");
       if (!advanced.activeStep && advanced.session?.status !== "completed") {
@@ -2662,6 +2853,55 @@ async function runBreakTest() {
         throw new Error("Completing an activity did not complete its active guidance row.");
       }
 
+      const routineSession = await window.nerve.startSession({
+        goal: "Break test: check specimens every 30 minutes and write a bench note.",
+        parsedSteps: [
+          {
+            title: "Check specimens",
+            nextAction: "Walk to the specimen station and check the labels.",
+            explanation: "This routine must come back on schedule.",
+            taskType: "Research",
+            deadlineText: "every 30 minutes",
+            dueAt: null,
+            reminderAt: new Date(Date.now() - 1000).toISOString(),
+            routineIntervalMinutes: 30,
+            routineNextAt: new Date(Date.now() - 1000).toISOString()
+          },
+          {
+            title: "Write bench note",
+            nextAction: "Open the notes and write one observation.",
+            explanation: "Use the time between routine checks.",
+            taskType: "General writing",
+            deadlineText: "",
+            dueAt: null,
+            reminderAt: null
+          }
+        ]
+      });
+      if (routineSession.activeStep?.title !== "Check specimens") {
+        throw new Error("Due routine task did not become active.");
+      }
+      const repeatedRoutine = await window.nerve.action("repeatRoutine");
+      const routineStep = repeatedRoutine.steps.find((step) => step.title === "Check specimens");
+      if (!routineStep?.routineNextAt || routineStep.status !== "pending") {
+        throw new Error("Routine repeat did not schedule the next occurrence.");
+      }
+      if (repeatedRoutine.activeStep?.title !== "Write bench note") {
+        throw new Error("Repeating a routine did not return focus to the next ready task.");
+      }
+      const breakReady = await window.nerve.updateSettings({
+        breakRemindersEnabled: true,
+        breakIntervalMinutes: 15,
+        breakDurationMinutes: 5
+      });
+      if (!breakReady.breakReminderAt) {
+        throw new Error("Enabling break reminders did not schedule the next break.");
+      }
+      const breakOff = await window.nerve.updateSettings({ breakRemindersEnabled: false });
+      if (breakOff.breakReminderAt || breakOff.breakEndsAt) {
+        throw new Error("Disabling break reminders did not clear break timers.");
+      }
+
       const started = await window.nerve.startSession({
         goal: "Break test: draft one resilient essay paragraph.",
         deadlineText: "later",
@@ -2687,6 +2927,15 @@ async function runBreakTest() {
         ]
       });
       if (!started.session || !started.activeStep) throw new Error("Valid session did not start.");
+      const secondStep = started.steps.find((step) => step.id !== started.activeStep?.id);
+      if (!secondStep) throw new Error("Reprioritization test needs a second step.");
+      const reprioritized = await window.nerve.reorderStep(secondStep.id, "up");
+      if (reprioritized.activeStep?.id !== secondStep.id) {
+        throw new Error("Moving a pending step to priority 1 did not make it active.");
+      }
+      if (reprioritized.steps.find((step) => step.id === started.activeStep?.id)?.status !== "pending") {
+        throw new Error("Previous active step was not demoted after reprioritization.");
+      }
 
       const paused = await window.nerve.pauseSession();
       if (paused.session?.status !== "paused") throw new Error("Pause failed in break test.");

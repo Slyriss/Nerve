@@ -13,7 +13,7 @@ const nerve = {
   deleteStep: (stepId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:deleteStep", stepId),
   reorderStep: (stepId: string, direction: "up" | "down"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:reorderStep", stepId, direction),
-  action: (action: "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking"): Promise<AppSnapshot> =>
+  action: (action: "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:action", action),
   updateSettings: (patch: Partial<NerveSettings>): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateSettings", patch),

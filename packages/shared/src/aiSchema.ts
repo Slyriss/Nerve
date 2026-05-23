@@ -114,6 +114,11 @@ export const planStepDraftSchema = z.object({
   deadlineText: z.string().optional().default(""),
   dueAt: z.string().nullable().optional(),
   reminderAt: z.string().nullable().optional(),
+  routineIntervalMinutes: z.preprocess(
+    (value) => (typeof value === "string" && value.trim() ? Number.parseInt(value, 10) : value),
+    z.number().int().positive().nullable().optional()
+  ),
+  routineNextAt: z.string().nullable().optional(),
   taskType: taskTypeSchema.optional()
 });
 
@@ -143,12 +148,6 @@ export const analyzeScreenOutputSchema = z.object({
   urgency: z.enum(["low", "medium"]),
   breadcrumbRelevance: z.enum(["productive", "unproductive", "unknown"]),
   detectedTaskType: taskTypeSchema.optional()
-});
-
-export const atomizeStepOutputSchema = z.object({
-  nextAction: z.string().min(1),
-  explanation: z.string().min(1),
-  atomizationLevel: z.number().int().min(1)
 });
 
 export function parseJsonObject(text: string): unknown {

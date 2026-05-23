@@ -1,6 +1,6 @@
 import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, ActionItemStatus } from "@nerve/shared";
 
-type NerveAction = "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking";
+type NerveAction = "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak";
 
 interface NerveBridge {
   getSnapshot: () => Promise<AppSnapshot>;

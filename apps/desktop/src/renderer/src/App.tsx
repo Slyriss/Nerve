@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
+<<<<<<< Updated upstream
 import {
   Activity,
   AlertTriangle,
@@ -29,6 +30,27 @@ import {
   Zap
 } from "lucide-react";
 import { taskTypes, type AppSnapshot, type BreadcrumbRecord, type EventRecord, type NerveSettings, type PlanStepDraft, type SessionLogData, type SessionSummaryRecord, type StepRecord, type TaskType } from "@nerve/shared";
+=======
+import { Activity, CalendarClock, Clock, Eye, FileText, ListChecks, Monitor, Settings } from "lucide-react";
+import type { AppSnapshot } from "@nerve/shared";
+import { useSnapshot } from "./lib/hooks";
+import { useCopy } from "./lib/copy";
+import { completionStats, nextScheduledLabel, stateLabel } from "./lib/utils";
+import type { View } from "./lib/types";
+import { ErrorBoundary } from "./components/ErrorBoundary";
+import { BlockerScreen } from "./components/BlockerScreen";
+import { Overlay } from "./components/Overlay";
+import { SessionCommandBar } from "./components/SessionCommandBar";
+import { ActiveSessionHandoff } from "./components/ActiveSessionHandoff";
+import { SessionStart } from "./components/SessionStart";
+import { PlanEditor } from "./components/PlanEditor";
+import { CalendarScreen } from "./components/CalendarScreen";
+import { SessionLog } from "./components/LogScreen";
+import { SessionHistory } from "./components/HistoryScreen";
+import { InboxScreen } from "./components/InboxScreen";
+import { SettingsScreen } from "./components/SettingsScreen";
+import { appDisplayName, brandIconLogo, brandWordLogo } from "./lib/catAssets";
+>>>>>>> Stashed changes
 import "./styles.css";
 
 type ConnectorName = "gmail";
@@ -655,7 +677,7 @@ function App() {
     }
   }, [sessionOpen]);
 
-  if (!snapshot) return <div className="loading">Nerve</div>;
+  if (!snapshot) return <div className="loading"><img src={brandIconLogo} alt="" /> {appDisplayName}</div>;
   if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
 
@@ -665,10 +687,13 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="mark">N</div>
+          <div className="mark"><img src={brandIconLogo} alt="" /></div>
           <div>
-            <h1>Nerve</h1>
-            <p>{t("privateCopilot")}</p>
+            <h1 className="brand-title" aria-label={appDisplayName}>
+              <span>别</span>
+              <img className="brand-wordmark" src={brandWordLogo} alt="meow" />
+              <span>鱼</span>
+            </h1>
           </div>
         </div>
         <nav className="tabs">

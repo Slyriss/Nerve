@@ -67,7 +67,7 @@ export function sanitizeTitle(title: string): string {
 /** Returns true when the detected window belongs to Nerve itself or is
  *  another source we should ignore (snipping tool, full-screen overlay). */
 export function isNoisyDetection(appName: string, windowTitle: string): boolean {
-  return /electron.*nerve|^nerve\b|snipping tool|entire screen/i.test(
+  return /electron.*nerve|^nerve\b|别meow鱼|\bmewo\b|snipping tool|entire screen/i.test(
     `${appName} ${windowTitle}`
   );
 }

@@ -72,6 +72,12 @@ let breakReminderAt: string | null = null;
 let breakEndsAt: string | null = null;
 let bannedSiteAlert: BannedSiteAlert | null = null;
 let bannedSiteStrikeCount = 0;
+<<<<<<< Updated upstream
+=======
+let lockInAlert = false;
+let lockInWarningStartedAt: string | null = null;
+let lockInWarningTimer: NodeJS.Timeout | null = null;
+>>>>>>> Stashed changes
 let lastBannedSiteEventKey: string | null = null;
 let lastBannedSiteEventAt = 0;
 let currentBreadcrumbId: string | null = null;
@@ -85,6 +91,10 @@ const overlayExpandedWidth = 260;
 const overlayBannedWidth = 320;
 const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 const MAX_REMINDER_WAKE_MS = 60_000;
+const LOCK_IN_BLOCKER_DELAY_MS = 20_000;
+const APP_DISPLAY_NAME = "别meow鱼";
+
+app.setName(APP_DISPLAY_NAME);
 
 const settingOptions = {
   aiProvider: ["deepseek"],
@@ -232,6 +242,7 @@ function scopesFromSteps(steps: PlanStepDraft[], fallback: TaskType[]) {
 }
 
 function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, contextText = ""): PlanStepDraft[] {
+<<<<<<< Updated upstream
   return steps
     .filter((step) => step.title?.trim() && step.nextAction?.trim())
     .map((step) => {
@@ -253,6 +264,83 @@ function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, 
         routineNextAt
       };
     });
+=======
+  // Pre-extract all times from the goal text so we can assign unmatched ones to steps that have no dueAt.
+  const goalTimes = contextText ? extractAllTimesFromText(contextText) : [];
+  const usedGoalTimeIndices = new Set<number>();
+
+  // Mark goal times already claimed by AI-returned dueAt values.
+  for (const step of steps) {
+    const claimed = validIso(step.dueAt);
+    if (!claimed) continue;
+    const claimedMs = Date.parse(claimed);
+    const match = goalTimes.find(
+      (t) => !usedGoalTimeIndices.has(t.index) && Math.abs(Date.parse(t.iso) - claimedMs) < 60_000
+    );
+    if (match) usedGoalTimeIndices.add(match.index);
+  }
+
+  const filtered = steps.filter((step) => step.title?.trim() && step.nextAction?.trim());
+
+  return filtered.map((step) => {
+    const routineText = `${step.title} ${step.nextAction} ${step.explanation ?? ""} ${step.deadlineText ?? ""} ${filtered.length === 1 ? contextText : ""}`;
+    const routineIntervalMinutes = normalizeRoutineInterval(step.routineIntervalMinutes, routineText);
+    const routineNextAt = nextRoutineTime(step, routineIntervalMinutes);
+
+    const explicitDueText = typeof step.dueAt === "string" && step.dueAt.trim().length > 0;
+    const explicitReminderText = typeof step.reminderAt === "string" && step.reminderAt.trim().length > 0;
+
+    // Time resolution order: valid AI dueAt → step-level text → goal-proximity match → goal-order fallback.
+    // If AI explicitly supplied an invalid date string, null it instead of guessing a replacement.
+    let dueAt = explicitDueText ? validIso(step.dueAt) : validIso(step.dueAt) ?? extractTimeIso(`${step.title} ${step.deadlineText ?? ""}`);
+    let deadlineText = step.deadlineText?.trim() || "";
+
+    if (!dueAt && !explicitDueText && contextText) {
+      // Find the nearest unassigned goal time to a keyword from the step title
+      const keywords = step.title.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+      const goalLower = contextText.toLowerCase();
+      let bestTime: { iso: string; index: number } | undefined;
+      let bestDist = Infinity;
+      for (const kw of keywords) {
+        const kwPos = goalLower.indexOf(kw);
+        if (kwPos === -1) continue;
+        for (const t of goalTimes) {
+          if (usedGoalTimeIndices.has(t.index)) continue;
+          const dist = Math.abs(t.index - kwPos);
+          if (dist < bestDist) { bestDist = dist; bestTime = t; }
+        }
+      }
+      // Also try a simple first-available fallback when there's only one unassigned time and one step without a time
+      if (!bestTime) {
+        bestTime = goalTimes.find((t) => !usedGoalTimeIndices.has(t.index));
+      }
+      if (bestTime && bestDist < 60) {
+        dueAt = bestTime.iso;
+        usedGoalTimeIndices.add(bestTime.index);
+        if (!deadlineText) {
+          const snippet = contextText.slice(Math.max(0, bestTime.index - 3), bestTime.index + 8).trim();
+          deadlineText = snippet;
+        }
+      }
+    }
+
+    const reminderAt = routineNextAt ?? (explicitReminderText ? validIso(step.reminderAt) : validIso(step.reminderAt) ?? (() => {
+      return dueAt ? new Date(Date.parse(dueAt) - 15 * 60_000).toISOString() : null;
+    })());
+
+    return {
+      title: step.title.trim(),
+      nextAction: step.nextAction.trim(),
+      explanation: step.explanation?.trim() || "One small step is enough.",
+      taskType: canonicalTaskType(step.taskType, fallbackTaskType),
+      deadlineText,
+      dueAt,
+      reminderAt,
+      routineIntervalMinutes,
+      routineNextAt
+    };
+  });
+>>>>>>> Stashed changes
 }
 
 function scheduleTimeForStep(step: Pick<PlanStepDraft, "reminderAt" | "dueAt" | "routineNextAt">) {
@@ -1370,7 +1458,7 @@ function checkReminders() {
     });
     if (Notification.isSupported()) {
       const notification = new Notification({
-        title: routineReminder ? "Nerve routine" : "Nerve reminder",
+        title: routineReminder ? `${APP_DISPLAY_NAME} routine` : `${APP_DISPLAY_NAME} reminder`,
         body: reminder.dueAt ? `${reminder.title} is due ${new Date(reminder.dueAt).toLocaleTimeString()}. ${reminder.message}` : reminder.message,
         silent: false
       });
@@ -1468,9 +1556,12 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
   const rule = bannedSiteMatch(settings, context);
   if (!rule) {
     bannedSiteAlert = null;
-    hideBlockerWindow();
+    if (!lockInAlert && !lockInWarningStartedAt) {
+      hideBlockerWindow();
+    }
     return false;
   }
+  clearLockInState();
   const timestamp = now();
   bannedSiteAlert = {
     rule,
@@ -1493,13 +1584,57 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
     });
     if (Notification.isSupported()) {
       new Notification({
-        title: "Nerve",
+        title: APP_DISPLAY_NAME,
         body: `Leave ${rule} and return to your task.`,
         silent: false
       }).show();
     }
   }
   return true;
+}
+
+function clearLockInWarning() {
+  lockInWarningStartedAt = null;
+  if (lockInWarningTimer) clearTimeout(lockInWarningTimer);
+  lockInWarningTimer = null;
+}
+
+function clearLockInState() {
+  clearLockInWarning();
+  lockInAlert = false;
+}
+
+function triggerLockInBlocker(sessionId: string) {
+  const session = getCurrentActiveSession();
+  if (!session || session.id !== sessionId || !session.lockInMode || !lockInWarningStartedAt || bannedSiteAlert) return;
+  lockInAlert = true;
+  overlayExpanded = true;
+  overlaySuppressUntil = 0;
+  showBlockerWindow();
+  addEvent(session.id, "lock_in_triggered", "Lock-in mode: refocus on your task.", {});
+  broadcast();
+}
+
+function startLockInWarning(session: SessionRecord) {
+  if (lockInAlert) return;
+  if (!lockInWarningStartedAt) {
+    lockInWarningStartedAt = now();
+    addEvent(session.id, "lock_in_warning", "Lock-in mode warning: return to the current task.", {});
+  }
+  if (!lockInWarningTimer) {
+    lockInWarningTimer = setTimeout(() => {
+      lockInWarningTimer = null;
+      triggerLockInBlocker(session.id);
+    }, LOCK_IN_BLOCKER_DELAY_MS);
+  }
+  overlayExpanded = true;
+  overlaySuppressUntil = 0;
+}
+
+function calmLockInWarning() {
+  if (!lockInWarningStartedAt && !lockInAlert) return;
+  clearLockInState();
+  if (!bannedSiteAlert) hideBlockerWindow();
 }
 
 function lastUsefulContext(sessionId: string): { activeApp: string; windowTitle: string } | null {
@@ -1676,6 +1811,19 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       }
     }
 
+<<<<<<< Updated upstream
+=======
+    if (session.lockInMode && !thinkingActive) {
+      if (observation.userState === "unproductive_drift" || observation.userState === "stuck") {
+        startLockInWarning(session);
+      } else if (observation.userState === "on_task" || observation.userState === "progress" || observation.userState === "productive_drift") {
+        calmLockInWarning();
+      }
+    } else if (session.lockInMode && thinkingActive) {
+      calmLockInWarning();
+    }
+
+>>>>>>> Stashed changes
     db.prepare(`INSERT INTO ai_observations (
       id, session_id, screenshot_id, step_id, provider, model, user_state, task_relevance, progress_state, active_app,
       active_context, visible_change_summary, concise_explanation, suggested_next_action, suggested_step_complete,
@@ -1764,6 +1912,72 @@ function clearReminderLoop() {
   reminderTimer = null;
 }
 
+<<<<<<< Updated upstream
+=======
+function clearBreakSchedule() {
+  breakReminderAt = null;
+  breakEndsAt = null;
+}
+
+function scheduleNextBreak(settings?: NerveSettings) {
+  const s = settings ?? getSettings();
+  if (!s.breakRemindersEnabled) {
+    clearBreakSchedule();
+    return;
+  }
+  breakEndsAt = null;
+  breakReminderAt = new Date(Date.now() + s.breakIntervalMinutes * 60 * 1000).toISOString();
+}
+
+function checkBreakReminders(): boolean {
+  const settings = getSettings();
+  if (!settings.breakRemindersEnabled) return false;
+
+  // Break is active — check if it has ended
+  if (breakEndsAt) {
+    if (Date.now() < Date.parse(breakEndsAt)) return false;
+    const session = getCurrentActiveSession();
+    if (session) {
+      finishBreak(session, false);
+    } else {
+      clearBreakSchedule();
+    }
+    return true;
+  }
+
+  // Break is due — start it
+  if (breakReminderAt && Date.now() >= Date.parse(breakReminderAt)) {
+    breakReminderAt = null;
+    breakEndsAt = new Date(Date.now() + settings.breakDurationMinutes * 60 * 1000).toISOString();
+    const session = getCurrentActiveSession();
+    if (session) {
+      addEvent(session.id, "break_started", `Break time: ${settings.breakDurationMinutes} minutes.`, {
+        durationMinutes: settings.breakDurationMinutes
+      });
+    }
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: "Break time",
+        body: `Take ${settings.breakDurationMinutes} min. ${APP_DISPLAY_NAME} will check back in.`,
+        silent: false
+      });
+      n.show();
+    }
+    overlayExpanded = true;
+    return true;
+  }
+
+  return false;
+}
+
+function finishBreak(session: SessionRecord, early: boolean) {
+  breakEndsAt = null;
+  breakReminderAt = null;
+  addEvent(session.id, early ? "break_ended_early" : "break_ended", "Break complete. Back to work.", {});
+  scheduleNextBreak();
+}
+
+>>>>>>> Stashed changes
 function stopSessionLoops() {
   captureService?.stop();
   captureService = null;
@@ -1818,6 +2032,11 @@ function snapshot(): AppSnapshot {
     breakEndsAt,
     bannedSiteAlert,
     bannedSiteStrikeCount,
+<<<<<<< Updated upstream
+=======
+    lockInAlert,
+    lockInWarningStartedAt,
+>>>>>>> Stashed changes
     screenshotFolder: screenshotDir(),
     connectors: getConnectorStatuses(),
     inboxItems: getVisibleInboxItems()
@@ -1858,6 +2077,7 @@ async function loadWindow(win: BrowserWindow, route: string) {
 function createOverlayWindow() {
   const { width, height } = screen.getPrimaryDisplay().workAreaSize;
   overlayWindow = new BrowserWindow({
+    title: APP_DISPLAY_NAME,
     width: overlaySlimWidth,
     height,
     x: width - overlaySlimWidth,
@@ -1900,6 +2120,7 @@ function showBlockerWindow() {
   }
   const { bounds } = screen.getPrimaryDisplay();
   blockerWindow = new BrowserWindow({
+    title: APP_DISPLAY_NAME,
     x: bounds.x,
     y: bounds.y,
     width: bounds.width,
@@ -1925,6 +2146,10 @@ function showBlockerWindow() {
 }
 
 function hideBlockerWindow() {
+<<<<<<< Updated upstream
+=======
+  clearLockInState();
+>>>>>>> Stashed changes
   if (blockerWindow && !blockerWindow.isDestroyed()) {
     blockerWindow.hide();
   }
@@ -1950,7 +2175,7 @@ function createMainWindow(route = "/") {
     height: 760,
     minWidth: 860,
     minHeight: 640,
-    title: "Nerve",
+    title: APP_DISPLAY_NAME,
     backgroundColor: "#00000000",
     backgroundMaterial: "mica",
     webPreferences: {
@@ -1974,13 +2199,16 @@ function createMainWindow(route = "/") {
 function registerIpc() {
   ipcMain.handle("nerve:getSnapshot", () => snapshot());
   ipcMain.handle("nerve:setOverlayExpanded", (_event, expanded: boolean) => {
-    overlayExpanded = bannedSiteAlert ? true : expanded;
+    overlayExpanded = bannedSiteAlert || lockInAlert || lockInWarningStartedAt ? true : expanded;
     overlaySuppressUntil = overlayExpanded ? 0 : Date.now() + MANUAL_COLLAPSE_COOLDOWN_MS;
     applyOverlayBounds();
     broadcast();
   });
   ipcMain.handle("nerve:openMain", (_event, route = "/") => createMainWindow(route));
-  ipcMain.handle("nerve:dismissBlocker", () => hideBlockerWindow());
+  ipcMain.handle("nerve:dismissBlocker", () => {
+    hideBlockerWindow();
+    broadcast();
+  });
   ipcMain.handle("nerve:openScreenshotFolder", () => shell.openPath(screenshotDir()));
   ipcMain.handle("nerve:updateSettings", (_event, patch: Partial<NerveSettings>) => {
     updateSettings(patch);
@@ -2200,7 +2428,8 @@ function registerIpc() {
           activeApp: activeWindow.activeApp,
           windowTitle: activeWindow.windowTitle
         });
-    const planSteps = sortPlanStepsBySchedule(normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal));
+    const normalizedPlanSteps = parsedSteps.length ? parsedSteps : normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal);
+    const planSteps = parsedSteps.length ? normalizedPlanSteps : sortPlanStepsBySchedule(normalizedPlanSteps);
 
     stopSessionLoops();
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status IN ('active', 'paused')").run(timestamp, timestamp);

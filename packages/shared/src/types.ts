@@ -381,6 +381,11 @@ export interface AppSnapshot {
   breakEndsAt: string | null;
   bannedSiteAlert: BannedSiteAlert | null;
   bannedSiteStrikeCount: number;
+<<<<<<< Updated upstream
+=======
+  lockInAlert: boolean;
+  lockInWarningStartedAt: string | null;
+>>>>>>> Stashed changes
   screenshotFolder: string;
   connectors: ConnectorStatus[];
   inboxItems: ActionItem[];

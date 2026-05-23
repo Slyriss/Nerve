@@ -18,7 +18,7 @@ function responseLanguage(language = "en") {
 
 export function planPrompt(input: GeneratePlanInput): string {
   const scopes = input.taskTypes?.length ? input.taskTypes : [input.taskType];
-  return `You are Nerve, a read-only ADHD task co-pilot.
+  return `You are 别meow鱼, a read-only ADHD task co-pilot.
 
 Tone rules:
 - ${toneRules}
@@ -99,7 +99,7 @@ Screen summary: ${input.screenSummary || "none"}`;
 
 export function screenAnalysisPrompt(input: AnalyzeScreenInput): string {
   const scopes = input.sessionTaskTypes?.length ? input.sessionTaskTypes : [input.taskType];
-  return `You are Nerve, a read-only ADHD task co-pilot.
+  return `You are 别meow鱼, a read-only ADHD task co-pilot.
 
 Tone rules:
 - ${toneRules}

@@ -549,6 +549,41 @@ h3 {
   align-items: center;
 }
 
+.checkbox-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  padding: 2px 0;
+}
+
+.checkbox-row input[type="checkbox"] {
+  margin-top: 2px;
+  flex-shrink: 0;
+  width: 15px;
+  height: 15px;
+  cursor: pointer;
+  accent-color: #f97316;
+}
+
+.checkbox-row span {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.checkbox-row strong {
+  font-size: 0.875rem;
+  font-weight: 600;
+}
+
+.checkbox-row .subtle {
+  font-size: 0.78rem;
+  opacity: 0.55;
+  line-height: 1.4;
+  margin: 0;
+}
+
 .parsed-timetable {
   display: grid;
   gap: var(--space-3);

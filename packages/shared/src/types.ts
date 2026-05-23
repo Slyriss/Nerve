@@ -366,6 +366,7 @@ export interface NerveSettings {
   breakRemindersEnabled: boolean;
   breakIntervalMinutes: 15 | 25 | 30 | 45 | 60 | 90;
   breakDurationMinutes: 5 | 10 | 15 | 20 | 30;
+  defaultLockInMode: boolean;
 }
 
 export interface AppSnapshot {
@@ -414,5 +415,6 @@ export const defaultSettings: NerveSettings = {
   googleClientSecret: "",
   breakRemindersEnabled: false,
   breakIntervalMinutes: 25,
-  breakDurationMinutes: 5
+  breakDurationMinutes: 5,
+  defaultLockInMode: false
 };

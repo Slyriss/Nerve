@@ -113,6 +113,33 @@ export function nextScheduledLabel(steps: Schedulable[]) {
   return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+export function parseDeadlineText(text: string): { dueAt: string | null; reminderAt: string | null } {
+  if (!text?.trim()) return { dueAt: null, reminderAt: null };
+  const lc = text.toLowerCase();
+  const isTomorrow = /\btomorrow\b/.test(lc);
+
+  // Match "at 9pm", "9:30pm", "9 pm", "at 21:00" — require am/pm or explicit "at HH:MM"
+  const withMeridian = lc.match(/(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/);
+  const withAt24 = lc.match(/\bat\s+(\d{1,2}):(\d{2})\b/);
+  const match = withMeridian ?? withAt24;
+  if (!match) return { dueAt: null, reminderAt: null };
+
+  let hours = parseInt(match[1], 10);
+  const minutes = match[2] ? parseInt(match[2], 10) : 0;
+  const meridian = (withMeridian ? match[3] : undefined)?.toLowerCase();
+
+  if (meridian === "pm" && hours < 12) hours += 12;
+  else if (meridian === "am" && hours === 12) hours = 0;
+
+  const d = new Date();
+  d.setHours(hours, minutes, 0, 0);
+  if (isTomorrow) d.setDate(d.getDate() + 1);
+  else if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+
+  const dueAt = d.toISOString();
+  return { dueAt, reminderAt: new Date(d.getTime() - 30 * 60_000).toISOString() };
+}
+
 export function defaultReminderLocal(minutes = 30) {
   return toDateTimeLocal(new Date(Date.now() + minutes * 60_000).toISOString());
 }

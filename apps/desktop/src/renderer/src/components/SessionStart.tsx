@@ -3,7 +3,7 @@ import { AlertTriangle, Check, Clock, ListChecks, Plus, Trash2 } from "lucide-re
 import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type TaskType } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
-import { hasPastDeadline, isToday, toDateTimeLocal, fromDateTimeLocal, addMinutesIso, syncedRoutinePatch, sortBySchedule } from "../lib/utils";
+import { hasPastDeadline, isToday, toDateTimeLocal, fromDateTimeLocal, addMinutesIso, syncedRoutinePatch, sortBySchedule, parseDeadlineText } from "../lib/utils";
 
 export function SessionStart({
   setSnapshot,
@@ -15,7 +15,7 @@ export function SessionStart({
   prefillGoal?: string;
 }) {
   const [goal, setGoal] = useState(prefillGoal ?? "");
-  const [lockInMode, setLockInMode] = useState(false);
+  const [lockInMode, setLockInMode] = useState(settings.defaultLockInMode ?? false);
   useEffect(() => {
     if (prefillGoal) setGoal(prefillGoal);
   }, [prefillGoal]);
@@ -107,13 +107,18 @@ export function SessionStart({
             </button>
             {parsedSteps.length > 0 && <span className="subtle">{parsedSteps.length} activities parsed</span>}
           </div>
-          <button className="primary" disabled={!goal.trim() || busy || unresolvedPastDeadlineCount > 0} onClick={start}>
-            <Check size={16} /> {t("startSession")}
-          </button>
+          {parsedSteps.length > 0 && (
+            <button className="primary" disabled={busy || unresolvedPastDeadlineCount > 0} onClick={start}>
+              <Check size={16} /> {t("startSession")}
+            </button>
+          )}
         </div>
-        <label className="toggle-label">
-          <input type="checkbox" checked={lockInMode} onChange={(event) => setLockInMode(event.target.checked)} />
-          {t("lockInMode")} — {t("lockInModeHint")}
+        <label className="checkbox-row">
+          <input type="checkbox" checked={lockInMode} onChange={(e) => setLockInMode(e.target.checked)} />
+          <span>
+            <strong>{t("lockInMode")}</strong>
+            <span className="subtle">{t("lockInModeHint")}</span>
+          </span>
         </label>
         {parsedSteps.length > 0 && (() => {
           const todaySteps = parsedSteps.filter((s) => s.dueAt && isToday(s.dueAt));
@@ -189,30 +194,49 @@ export function SessionStart({
                         const dueAt = fromDateTimeLocal(event.currentTarget.value);
                         patchParsedStep(index, {
                           dueAt,
-                          ...(step.routineIntervalMinutes && !step.routineNextAt && dueAt ? { routineNextAt: addMinutesIso(dueAt, step.routineIntervalMinutes), reminderAt: dueAt } : {}),
+                          reminderAt: dueAt ?? step.reminderAt,
+                          ...(step.routineIntervalMinutes && dueAt ? { routineNextAt: addMinutesIso(dueAt, step.routineIntervalMinutes) } : {}),
                           pastDeadlineConfirmed: false
                         });
                       }}
                     />
                   </label>
-                  <label className="time-field">
-                    {t("routineNext")}
-                    <input
-                      type="datetime-local"
-                      value={toDateTimeLocal(step.routineNextAt)}
-                      onChange={(event) => {
-                        const routineNextAt = fromDateTimeLocal(event.currentTarget.value);
-                        patchParsedStep(index, {
-                          routineNextAt,
-                          pastDeadlineConfirmed: false
-                        });
-                      }}
-                    />
-                  </label>
+                  {!!step.routineIntervalMinutes && (
+                    <label className="time-field">
+                      {t("routineNext")}
+                      <input
+                        type="datetime-local"
+                        value={toDateTimeLocal(step.routineNextAt)}
+                        onChange={(event) => {
+                          const routineNextAt = fromDateTimeLocal(event.currentTarget.value);
+                          patchParsedStep(index, {
+                            routineNextAt,
+                            pastDeadlineConfirmed: false
+                          });
+                        }}
+                      />
+                    </label>
+                  )}
                 </div>
                 <div className="activity-fields">
                   <input value={step.title} onChange={(event) => patchParsedStep(index, { title: event.currentTarget.value })} />
-                  <input value={step.deadlineText || ""} placeholder="Deadline text" onChange={(event) => patchParsedStep(index, { deadlineText: event.currentTarget.value })} />
+                  <input
+                    value={step.deadlineText || ""}
+                    placeholder="e.g. at 9pm, tomorrow at 10am"
+                    onChange={(event) => {
+                      const deadlineText = event.currentTarget.value;
+                      const { dueAt, reminderAt } = parseDeadlineText(deadlineText);
+                      const patch: Partial<typeof step> = { deadlineText, pastDeadlineConfirmed: false };
+                      if (!deadlineText.trim()) {
+                        patch.dueAt = null;
+                        patch.reminderAt = null;
+                      } else if (dueAt !== null) {
+                        patch.dueAt = dueAt;
+                        patch.reminderAt = reminderAt;
+                      }
+                      patchParsedStep(index, patch);
+                    }}
+                  />
                   <p className="subtle">The next physical action will appear in the sidebar when this activity is active.</p>
                 </div>
                 <div className="activity-controls">
@@ -221,17 +245,30 @@ export function SessionStart({
                       <option key={type} value={type}>{type}</option>
                     ))}
                   </select>
-                  <label className="time-field">
-                    {t("routineEvery")}
+                  <label className="checkbox-row" style={{ marginTop: 4 }}>
                     <input
-                      type="number"
-                      min="0"
-                      step="5"
-                      value={step.routineIntervalMinutes ?? ""}
-                      onChange={(event) => patchParsedStep(index, { ...syncedRoutinePatch(step, event.currentTarget.value ? Number(event.currentTarget.value) : null), pastDeadlineConfirmed: false })}
-                      placeholder="minutes"
+                      type="checkbox"
+                      checked={!!step.routineIntervalMinutes}
+                      onChange={(e) => patchParsedStep(index, {
+                        ...syncedRoutinePatch(step, e.target.checked ? 30 : null),
+                        pastDeadlineConfirmed: false
+                      })}
                     />
+                    <span><strong>{t("routineEvery")}</strong></span>
                   </label>
+                  {!!step.routineIntervalMinutes && (
+                    <label className="time-field">
+                      <input
+                        type="number"
+                        min="5"
+                        step="5"
+                        value={step.routineIntervalMinutes ?? ""}
+                        onChange={(event) => patchParsedStep(index, { ...syncedRoutinePatch(step, event.currentTarget.value ? Number(event.currentTarget.value) : null), pastDeadlineConfirmed: false })}
+                        placeholder="minutes"
+                      />
+                      <span className="subtle" style={{ fontSize: "0.75rem" }}>min</span>
+                    </label>
+                  )}
                   {pastDeadline && !step.pastDeadlineConfirmed && (
                     <div className="deadline-warning">
                       <AlertTriangle size={15} />

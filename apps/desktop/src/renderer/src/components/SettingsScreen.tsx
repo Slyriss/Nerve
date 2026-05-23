@@ -5,15 +5,24 @@ import { Select } from "./Select";
 import { useCopy } from "../lib/copy";
 import type { ConnectorStatus } from "../lib/types";
 
+
 export function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const [settings, setSettings] = useState(snapshot.settings);
   const [pendingClientSecret, setPendingClientSecret] = useState("");
+  const [lockInDefault, setLockInDefault] = useState(snapshot.settings.defaultLockInMode ?? false);
   const t = useCopy(settings.language);
-  useEffect(() => setSettings(snapshot.settings), [snapshot.settings]);
+  useEffect(() => {
+    setSettings(snapshot.settings);
+    setLockInDefault(snapshot.settings.defaultLockInMode ?? false);
+  }, [snapshot.settings]);
   async function save(patch: Partial<NerveSettings>) {
     const refreshed = await window.nerve.updateSettings(patch);
     setSettings(refreshed.settings);
     setSnapshot(refreshed);
+  }
+  async function toggleLockIn(checked: boolean) {
+    setLockInDefault(checked); // optimistic
+    await save({ defaultLockInMode: checked });
   }
   return (
     <section className="settings-layout">
@@ -34,6 +43,13 @@ export function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapsho
             <Select label={t("driftThreshold")} value={settings.driftThresholdMinutes} onChange={(value) => save({ driftThresholdMinutes: Number(value) as NerveSettings["driftThresholdMinutes"] })} options={[3, 6, 10]} suffix="minutes" />
             <Select label={t("thinkingPause")} value={settings.thinkingPauseMinutes} onChange={(value) => save({ thinkingPauseMinutes: Number(value) as NerveSettings["thinkingPauseMinutes"] })} options={[3, 5, 10]} suffix="minutes" />
             <Select label={t("panelOpacity")} value={settings.panelOpacity} onChange={(value) => save({ panelOpacity: Number(value) as NerveSettings["panelOpacity"] })} options={[0.5]} suffix="" />
+            <div className="checkbox-row">
+              <input type="checkbox" checked={lockInDefault} disabled style={{ opacity: 0.4 }} />
+              <span>
+                <strong>{t("lockInMode")}</strong>
+                <span className="subtle">Toggle this on the session start screen — it cannot be changed here.</span>
+              </span>
+            </div>
           </div>
         </section>
         <section className="settings-section">

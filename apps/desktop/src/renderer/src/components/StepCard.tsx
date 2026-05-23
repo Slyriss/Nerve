@@ -1,4 +1,4 @@
-import { Check, Clock, Pause, Play } from "lucide-react";
+import { Check, Clock, Pause, Play, RefreshCw } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
@@ -26,7 +26,7 @@ export function StepCard({
   const paused = snapshot.session?.status === "paused";
   const { completed, percent, total } = completionStats(snapshot.steps);
   useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt || snapshot.delayUntil ? 1000 : 30_000);
-  async function action(type: "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "endBreak") {
+  async function action(type: "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "endBreak" | "repeatRoutine") {
     setSnapshot(await window.nerve.action(type));
   }
   if (!snapshot.session) {
@@ -130,6 +130,11 @@ export function StepCard({
         <button onClick={() => action("delay")}>
           <Clock size={16} /> {delayActive ? `Cancel (${timeLeft(snapshot.delayUntil)})` : t("delay")}
         </button>
+        {step.routineIntervalMinutes && (
+          <button onClick={() => action("repeatRoutine")} title={t("repeatRoutine")}>
+            <RefreshCw size={16} /> {t("repeatRoutine")}
+          </button>
+        )}
         {!compact && (
           <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
             <Pause size={16} /> {t("pauseSession")}

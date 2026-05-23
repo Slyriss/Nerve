@@ -233,28 +233,113 @@ function scopesFromSteps(steps: PlanStepDraft[], fallback: TaskType[]) {
   ]);
 }
 
+function extractTimeIso(text: string): string | null {
+  // Match "at Xpm", "at X:YYpm", or bare "Xpm"/"X:YYpm" with meridian
+  const match = text.match(/(?:\bat\s+|(?<=\s)|^)(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/i)
+    ?? text.match(/\bat\s+(\d{1,2})(?::(\d{2}))?\b/i);
+  if (!match) return null;
+  let hours = parseInt(match[1], 10);
+  const minutes = match[2] ? parseInt(match[2], 10) : 0;
+  const meridian = match[3]?.toLowerCase();
+  if (meridian === "pm" && hours < 12) hours += 12;
+  if (meridian === "am" && hours === 12) hours = 0;
+  const d = new Date();
+  d.setHours(hours, minutes, 0, 0);
+  if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+  return d.toISOString();
+}
+
+// Finds all "Xpm" / "at Xpm" occurrences in text, returns each as { iso, index } sorted by position.
+function extractAllTimesFromText(text: string): { iso: string; index: number }[] {
+  const results: { iso: string; index: number }[] = [];
+  const re = /(?:\bat\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)\b/gi;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(text)) !== null) {
+    let hours = parseInt(m[1], 10);
+    const minutes = m[2] ? parseInt(m[2], 10) : 0;
+    const meridian = m[3].toLowerCase();
+    if (meridian === "pm" && hours < 12) hours += 12;
+    if (meridian === "am" && hours === 12) hours = 0;
+    const d = new Date();
+    d.setHours(hours, minutes, 0, 0);
+    if (d.getTime() <= Date.now()) d.setDate(d.getDate() + 1);
+    results.push({ iso: d.toISOString(), index: m.index });
+  }
+  return results;
+}
+
 function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType, contextText = ""): PlanStepDraft[] {
-  return steps
-    .filter((step) => step.title?.trim() && step.nextAction?.trim())
-    .map((step) => {
-      const routineText = `${step.title} ${step.nextAction} ${step.explanation ?? ""} ${step.deadlineText ?? ""} ${steps.length === 1 ? contextText : ""}`;
-      const routineIntervalMinutes = normalizeRoutineInterval(
-        step.routineIntervalMinutes,
-        routineText
-      );
-      const routineNextAt = nextRoutineTime(step, routineIntervalMinutes);
-      return {
-        title: step.title.trim(),
-        nextAction: step.nextAction.trim(),
-        explanation: step.explanation?.trim() || "One small step is enough.",
-        taskType: canonicalTaskType(step.taskType, fallbackTaskType),
-        deadlineText: step.deadlineText?.trim() || "",
-        dueAt: validIso(step.dueAt),
-        reminderAt: routineNextAt ?? validIso(step.reminderAt),
-        routineIntervalMinutes,
-        routineNextAt
-      };
-    });
+  // Pre-extract all times from the goal text so we can assign unmatched ones to steps that have no dueAt.
+  const goalTimes = contextText ? extractAllTimesFromText(contextText) : [];
+  const usedGoalTimeIndices = new Set<number>();
+
+  // Mark goal times already claimed by AI-returned dueAt values.
+  for (const step of steps) {
+    const claimed = validIso(step.dueAt);
+    if (!claimed) continue;
+    const claimedMs = Date.parse(claimed);
+    const match = goalTimes.find(
+      (t) => !usedGoalTimeIndices.has(t.index) && Math.abs(Date.parse(t.iso) - claimedMs) < 60_000
+    );
+    if (match) usedGoalTimeIndices.add(match.index);
+  }
+
+  const filtered = steps.filter((step) => step.title?.trim() && step.nextAction?.trim());
+
+  return filtered.map((step) => {
+    const routineText = `${step.title} ${step.nextAction} ${step.explanation ?? ""} ${step.deadlineText ?? ""} ${filtered.length === 1 ? contextText : ""}`;
+    const routineIntervalMinutes = normalizeRoutineInterval(step.routineIntervalMinutes, routineText);
+    const routineNextAt = nextRoutineTime(step, routineIntervalMinutes);
+
+    // Time resolution order: AI dueAt → step-level text → goal-proximity match → goal-order fallback
+    let dueAt = validIso(step.dueAt) ?? extractTimeIso(`${step.title} ${step.deadlineText ?? ""}`);
+    let deadlineText = step.deadlineText?.trim() || "";
+
+    if (!dueAt && contextText) {
+      // Find the nearest unassigned goal time to a keyword from the step title
+      const keywords = step.title.toLowerCase().split(/\s+/).filter((w) => w.length > 3);
+      const goalLower = contextText.toLowerCase();
+      let bestTime: { iso: string; index: number } | undefined;
+      let bestDist = Infinity;
+      for (const kw of keywords) {
+        const kwPos = goalLower.indexOf(kw);
+        if (kwPos === -1) continue;
+        for (const t of goalTimes) {
+          if (usedGoalTimeIndices.has(t.index)) continue;
+          const dist = Math.abs(t.index - kwPos);
+          if (dist < bestDist) { bestDist = dist; bestTime = t; }
+        }
+      }
+      // Also try a simple first-available fallback when there's only one unassigned time and one step without a time
+      if (!bestTime) {
+        bestTime = goalTimes.find((t) => !usedGoalTimeIndices.has(t.index));
+      }
+      if (bestTime && bestDist < 60) {
+        dueAt = bestTime.iso;
+        usedGoalTimeIndices.add(bestTime.index);
+        if (!deadlineText) {
+          const snippet = contextText.slice(Math.max(0, bestTime.index - 3), bestTime.index + 8).trim();
+          deadlineText = snippet;
+        }
+      }
+    }
+
+    const reminderAt = routineNextAt ?? validIso(step.reminderAt) ?? (() => {
+      return dueAt ? new Date(Date.parse(dueAt) - 15 * 60_000).toISOString() : null;
+    })();
+
+    return {
+      title: step.title.trim(),
+      nextAction: step.nextAction.trim(),
+      explanation: step.explanation?.trim() || "One small step is enough.",
+      taskType: canonicalTaskType(step.taskType, fallbackTaskType),
+      deadlineText,
+      dueAt,
+      reminderAt,
+      routineIntervalMinutes,
+      routineNextAt
+    };
+  });
 }
 
 function scheduleTimeForStep(step: Pick<PlanStepDraft, "reminderAt" | "dueAt" | "routineNextAt">) {
@@ -409,6 +494,16 @@ function ensureStorage() {
   ensureColumn("sessions", "lock_in_mode", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("ai_observations", "step_id", "TEXT");
   ensureColumn("ai_observations", "detected_task_type", "TEXT");
+  ensureColumn("reminders", "step_id", "TEXT");
+  ensureColumn("reminders", "due_at", "TEXT");
+  ensureColumn("reminders", "triggered_at", "TEXT");
+  ensureColumn("connector_tokens", "email", "TEXT");
+  ensureColumn("connector_tokens", "expires_at", "TEXT");
+  ensureColumn("inbox_items", "description", "TEXT NOT NULL DEFAULT ''");
+  ensureColumn("inbox_items", "urgency", "TEXT NOT NULL DEFAULT 'low'");
+  ensureColumn("inbox_items", "suggested_task_type", "TEXT NOT NULL DEFAULT 'Email or admin'");
+  ensureColumn("inbox_items", "due_hint", "TEXT");
+  ensureColumn("inbox_items", "status", "TEXT NOT NULL DEFAULT 'pending'");
   migrateLegacyStepsToActivities();
   for (const [key, value] of Object.entries(defaultSettings)) {
     orm.insert(settingsTable)
@@ -1014,6 +1109,9 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (patch.breakDurationMinutes && (settingOptions.breakDurationMinutes as readonly number[]).includes(patch.breakDurationMinutes)) {
     normalized.breakDurationMinutes = patch.breakDurationMinutes;
+  }
+  if (typeof patch.defaultLockInMode === "boolean") {
+    normalized.defaultLockInMode = patch.defaultLockInMode;
   }
   return normalized;
 }

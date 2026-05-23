@@ -34,11 +34,11 @@ Avoid vague steps like "work on it". Each row needs one immediately physical nex
 Use only these exact taskType values: "Essay writing", "General writing", "Coding", "Research", "Study", "Email or admin", "Presentation", "Personal / life", "Health / self-care", "Household / chores", "Errands", "Meals", "Pet care", "Exercise", "Social / communication", "Finance / bills", "Design or creative", "Planning", "Mixed work".
 Use the most specific taskType that fits. For example: shower = "Health / self-care"; dinner = "Meals"; walk dog = "Pet care"; finish slides = "Presentation"; pay rent = "Finance / bills"; text someone back = "Social / communication"; clean room = "Household / chores".
 The user may paste a long messy task list. Parse it into distinct user activities, identify explicit and implied deadlines, order the activities by deadline/risk/dependencies, and preserve the important task names.
-For every step with a deadline, include:
-- deadlineText: the human wording, such as "today at 3pm" or "Friday 10am".
-- dueAt: an ISO 8601 timestamp with timezone offset when you can infer it from the current date/time.
-- reminderAt: an ISO 8601 timestamp, usually 30 minutes before dueAt for short-term deadlines. Use earlier reminders for larger work when helpful.
-If no deadline exists for a step, use deadlineText "", dueAt null, reminderAt null.
+For every step where the goal mentions a time — even a casual one like "coffee at 8pm" or "run at 10pm" — treat that time as the step's dueAt. Include:
+- deadlineText: the human wording exactly as written, such as "at 8pm", "today at 3pm", or "Friday 10am".
+- dueAt: an ISO 8601 timestamp with timezone offset inferred from the current date/time.
+- reminderAt: an ISO 8601 timestamp, usually 30 minutes before dueAt. Use earlier reminders for larger work.
+If absolutely no time is mentioned for a step, use deadlineText "", dueAt null, reminderAt null.
 For repeated or routine tasks, such as "check specimens every 30 minutes" or "take medication every 4 hours", keep one row for that activity and include:
 - routineIntervalMinutes: the repeat interval in whole minutes.
 - routineNextAt: the next ISO 8601 timestamp when the app should prompt for the routine, or null if it cannot be inferred.

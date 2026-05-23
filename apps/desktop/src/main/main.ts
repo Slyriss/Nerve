@@ -28,9 +28,13 @@ import {
   type SessionSummaryRecord,
   type StepRecord,
   type TaskHistoryRecord,
-  type TaskType
+  type TaskType,
+  type ActionItem,
+  type ActionItemStatus,
+  type ConnectorStatus
 } from "@nerve/shared";
 import { schema, settingsTable } from "./db/schema.js";
+import { startGmailOAuth, refreshGmailToken, fetchGmailMessages, encryptToken, decryptToken, type GmailTokens, type RawGmailMessage } from "./connectors/gmail.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -322,6 +326,29 @@ function ensureStorage() {
     CREATE INDEX IF NOT EXISTS idx_breadcrumbs_session ON breadcrumbs(session_id, started_at);
     CREATE INDEX IF NOT EXISTS idx_task_history_session ON task_history(session_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_reminders_session ON reminders(session_id, reminder_at);
+    CREATE TABLE IF NOT EXISTS connector_tokens (
+      connector TEXT PRIMARY KEY,
+      access_token TEXT,
+      refresh_token TEXT,
+      email TEXT,
+      expires_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS inbox_items (
+      id TEXT PRIMARY KEY,
+      source TEXT NOT NULL,
+      source_message_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT NOT NULL DEFAULT '',
+      urgency TEXT NOT NULL DEFAULT 'low',
+      suggested_task_type TEXT NOT NULL DEFAULT 'Email or admin',
+      due_hint TEXT,
+      status TEXT NOT NULL DEFAULT 'pending',
+      extracted_at TEXT NOT NULL,
+      created_at TEXT NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_items_status ON inbox_items(status, extracted_at);
   `);
   ensureColumn("sessions", "task_types_json", "TEXT NOT NULL DEFAULT '[]'");
   ensureColumn("steps", "task_type", "TEXT NOT NULL DEFAULT 'General writing'");
@@ -627,6 +654,127 @@ function getSettings(): NerveSettings {
   return cachedSettings;
 }
 
+function getConnectorTokenRow(connector: string): { accessToken: string | null; refreshToken: string | null; email: string | null; expiresAt: string | null } | null {
+  const row = db.prepare("SELECT * FROM connector_tokens WHERE connector = ?").get(connector) as any;
+  if (!row) return null;
+  return {
+    accessToken: row.access_token ?? null,
+    refreshToken: row.refresh_token ?? null,
+    email: row.email ?? null,
+    expiresAt: row.expires_at ?? null
+  };
+}
+
+function getConnectorStatuses(): ConnectorStatus[] {
+  const gmail = getConnectorTokenRow("gmail");
+  return [{
+    name: "gmail",
+    connected: gmail !== null && gmail.accessToken !== null,
+    lastFetchedAt: null,
+    email: gmail?.email ?? null,
+    error: null
+  }];
+}
+
+function getPendingInboxItems(): ActionItem[] {
+  const rows = db.prepare("SELECT * FROM inbox_items WHERE status = 'pending' ORDER BY extracted_at DESC LIMIT 50").all() as any[];
+  return rows.map(r => ({
+    id: r.id,
+    title: r.title,
+    description: r.description,
+    source: r.source as "gmail",
+    sourceMessageId: r.source_message_id,
+    urgency: r.urgency as "low" | "medium" | "high",
+    suggestedTaskType: r.suggested_task_type,
+    dueHint: r.due_hint ?? undefined,
+    extractedAt: r.extracted_at,
+    status: r.status as "pending" | "promoted" | "dismissed"
+  }));
+}
+
+async function getValidGmailAccessToken(): Promise<string | null> {
+  const settings = getSettings();
+  if (!settings.googleClientId) return null;
+  const row = getConnectorTokenRow("gmail");
+  if (!row?.accessToken) return null;
+  // Check expiry (refresh if within 5 minutes of expiring)
+  if (row.expiresAt && new Date(row.expiresAt).getTime() - Date.now() < 5 * 60 * 1000) {
+    if (!row.refreshToken) return null;
+    try {
+      const { accessToken, expiresAt } = await refreshGmailToken(settings.googleClientId, row.refreshToken);
+      const encryptedAccess = encryptToken(accessToken);
+      db.prepare("UPDATE connector_tokens SET access_token = ?, expires_at = ?, updated_at = ? WHERE connector = 'gmail'")
+        .run(encryptedAccess, expiresAt, now());
+      return accessToken;
+    } catch {
+      return null;
+    }
+  }
+  return row.accessToken.startsWith("enc:") ? decryptToken(row.accessToken) : row.accessToken;
+}
+
+async function extractActionItemsFromMessages(messages: RawGmailMessage[]): Promise<ActionItem[]> {
+  if (!messages.length) return [];
+  const settings = getSettings();
+  const messagesSummary = messages.map((m, i) =>
+    `[${i + 1}] From: ${m.sender}\nSubject: ${m.subject}\nReceived: ${m.receivedAt}\nBody excerpt: ${m.body.slice(0, 500)}`
+  ).join("\n\n---\n\n");
+
+  const prompt = `You are an ADHD assistant. Extract concrete action items from these emails.
+For each action item, return a JSON object with:
+- title: short action phrase (5-10 words)
+- description: 1-2 sentence context
+- source: "gmail"
+- sourceMessageId: the message index as string (e.g. "1", "2")
+- urgency: "low" | "medium" | "high"
+- suggestedTaskType: one of: "Essay writing", "General writing", "Coding", "Research", "Study", "Email or admin", "Presentation", "Personal / life", "Health / self-care", "Household / chores", "Errands", "Meals", "Pet care", "Exercise", "Social / communication", "Finance / bills", "Design or creative", "Planning", "Mixed work"
+- dueHint: optional deadline hint extracted from email (e.g. "by Friday", null if none)
+
+Return a JSON array. Only include items that genuinely require user action. Skip newsletters, receipts, and FYI emails.
+
+EMAILS:
+${messagesSummary}
+
+Return ONLY valid JSON array.`;
+
+  try {
+    const response = await fetch("https://api.deepseek.com/chat/completions", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${settings.deepseekApiKey}`
+      },
+      body: JSON.stringify({
+        model: settings.deepseekModel || "deepseek-chat",
+        messages: [{ role: "user", content: prompt }],
+        temperature: 0.3,
+        max_tokens: 1000
+      })
+    });
+    if (!response.ok) return [];
+    const data = await response.json() as any;
+    const content = data.choices?.[0]?.message?.content ?? "";
+    const match = content.match(/\[[\s\S]*\]/);
+    if (!match) return [];
+    const items = JSON.parse(match[0]) as any[];
+    const nowStr = now();
+    return items.map((item: any) => ({
+      id: id(),
+      title: String(item.title ?? "").slice(0, 200),
+      description: String(item.description ?? "").slice(0, 500),
+      source: "gmail" as const,
+      sourceMessageId: String(item.sourceMessageId ?? ""),
+      urgency: (["low", "medium", "high"].includes(item.urgency) ? item.urgency : "low") as "low" | "medium" | "high",
+      suggestedTaskType: canonicalTaskType(item.suggestedTaskType, "Email or admin"),
+      dueHint: item.dueHint ? String(item.dueHint).slice(0, 100) : undefined,
+      extractedAt: nowStr,
+      status: "pending" as const
+    }));
+  } catch {
+    return [];
+  }
+}
+
 function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
   const normalized = normalizeSettingsPatch(patch);
   for (const [key, value] of Object.entries(normalized)) {
@@ -696,6 +844,12 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (typeof patch.soundEnabled === "boolean") {
     normalized.soundEnabled = patch.soundEnabled;
+  }
+  if (typeof patch.gmailEnabled === "boolean") {
+    normalized.gmailEnabled = patch.gmailEnabled;
+  }
+  if (typeof patch.googleClientId === "string") {
+    normalized.googleClientId = patch.googleClientId.trim();
   }
   return normalized;
 }
@@ -1350,7 +1504,9 @@ function snapshot(): AppSnapshot {
     thinkingPauseUntil,
     bannedSiteAlert,
     bannedSiteStrikeCount,
-    screenshotFolder: screenshotDir()
+    screenshotFolder: screenshotDir(),
+    connectors: getConnectorStatuses(),
+    inboxItems: getPendingInboxItems()
   };
 }
 
@@ -1559,6 +1715,68 @@ function registerIpc() {
     fs.mkdirSync(screenshotDir(), { recursive: true });
     broadcast();
   });
+
+  ipcMain.handle("nerve:connectGmail", async (): Promise<AppSnapshot> => {
+    const settings = getSettings();
+    if (!settings.googleClientId) throw new Error("Google Client ID not configured in Settings");
+    try {
+      const tokens = await startGmailOAuth(settings.googleClientId);
+      const encAccess = encryptToken(tokens.accessToken);
+      const encRefresh = encryptToken(tokens.refreshToken);
+      const nowStr = now();
+      db.prepare(`
+        INSERT INTO connector_tokens (connector, access_token, refresh_token, email, expires_at, created_at, updated_at)
+        VALUES ('gmail', ?, ?, ?, ?, ?, ?)
+        ON CONFLICT(connector) DO UPDATE SET
+          access_token = excluded.access_token,
+          refresh_token = excluded.refresh_token,
+          email = excluded.email,
+          expires_at = excluded.expires_at,
+          updated_at = excluded.updated_at
+      `).run(encAccess, encRefresh, tokens.email, tokens.expiresAt, nowStr, nowStr);
+      broadcast();
+      return snapshot();
+    } catch (err) {
+      throw new Error(`Gmail connection failed: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  });
+
+  ipcMain.handle("nerve:disconnectGmail", async (): Promise<AppSnapshot> => {
+    db.prepare("DELETE FROM connector_tokens WHERE connector = 'gmail'").run();
+    db.prepare("DELETE FROM inbox_items WHERE source = 'gmail'").run();
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:fetchInbox", async (): Promise<AppSnapshot> => {
+    const accessToken = await getValidGmailAccessToken();
+    if (!accessToken) throw new Error("Gmail not connected or token expired");
+    const messages = await fetchGmailMessages(accessToken, 20, true);
+    const existingIds = new Set<string>(
+      (db.prepare("SELECT source_message_id FROM inbox_items WHERE source = 'gmail'").all() as any[]).map((r: any) => r.source_message_id)
+    );
+    const newMessages = messages.filter(m => !existingIds.has(m.id));
+    if (newMessages.length) {
+      const items = await extractActionItemsFromMessages(newMessages);
+      const insertStmt = db.prepare(`
+        INSERT OR IGNORE INTO inbox_items (id, source, source_message_id, title, description, urgency, suggested_task_type, due_hint, status, extracted_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+      `);
+      const nowStr = now();
+      for (const item of items) {
+        insertStmt.run(item.id, item.source, item.sourceMessageId, item.title, item.description, item.urgency, item.suggestedTaskType, item.dueHint ?? null, item.extractedAt, nowStr);
+      }
+    }
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:updateInboxItem", async (_event, itemId: string, status: ActionItemStatus): Promise<AppSnapshot> => {
+    db.prepare("UPDATE inbox_items SET status = ? WHERE id = ?").run(status, itemId);
+    broadcast();
+    return snapshot();
+  });
+
   ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }) => {
     const goal = typeof input.goal === "string" ? input.goal.trim() : "";
     if (!goal) {

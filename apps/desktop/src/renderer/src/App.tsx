@@ -31,7 +31,32 @@ import {
 import { taskTypes, type AppSnapshot, type BreadcrumbRecord, type EventRecord, type NerveSettings, type PlanStepDraft, type SessionLogData, type SessionSummaryRecord, type StepRecord, type TaskType } from "@nerve/shared";
 import "./styles.css";
 
-type View = "start" | "plan" | "log" | "history" | "settings";
+type ConnectorName = "gmail";
+type ActionItemStatus = "pending" | "promoted" | "dismissed";
+type ActionItemUrgency = "low" | "medium" | "high";
+
+interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  source: ConnectorName;
+  sourceMessageId: string;
+  urgency: ActionItemUrgency;
+  suggestedTaskType: string;
+  dueHint?: string;
+  extractedAt: string;
+  status: ActionItemStatus;
+}
+
+interface ConnectorStatus {
+  name: ConnectorName;
+  connected: boolean;
+  lastFetchedAt?: string | null;
+  email?: string | null;
+  error?: string | null;
+}
+
+type View = "start" | "plan" | "log" | "history" | "settings" | "inbox";
 type CopyKey =
   | "privateCopilot"
   | "session"
@@ -104,7 +129,21 @@ type CopyKey =
   | "endSessionConfirmYes"
   | "endSessionConfirmNo"
   | "replanSession"
-  | "replanning";
+  | "replanning"
+  | "inboxTitle"
+  | "inboxEmpty"
+  | "inboxFetch"
+  | "inboxFetching"
+  | "inboxConnect"
+  | "inboxDisconnect"
+  | "inboxPromote"
+  | "inboxDismiss"
+  | "inboxConnected"
+  | "inboxNotConnected"
+  | "inboxSetupHint"
+  | "connectors"
+  | "googleClientId"
+  | "googleClientIdHint";
 
 const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
   en: {
@@ -179,7 +218,21 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     endSessionConfirmYes: "Yes, end it",
     endSessionConfirmNo: "Keep going",
     replanSession: "Re-plan from here",
-    replanning: "Regenerating plan…"
+    replanning: "Regenerating plan…",
+    inboxTitle: "Inbox",
+    inboxEmpty: "No action items found",
+    inboxFetch: "Scan inbox",
+    inboxFetching: "Scanning...",
+    inboxConnect: "Connect Gmail",
+    inboxDisconnect: "Disconnect",
+    inboxPromote: "Add to session",
+    inboxDismiss: "Dismiss",
+    inboxConnected: "Connected",
+    inboxNotConnected: "Not connected",
+    inboxSetupHint: "Enter your Google OAuth Client ID in Settings to connect Gmail.",
+    connectors: "Connectors",
+    googleClientId: "Google Client ID",
+    googleClientIdHint: "Create a Desktop app OAuth client at console.cloud.google.com"
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -253,7 +306,21 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     endSessionConfirmYes: "是的，结束",
     endSessionConfirmNo: "继续进行",
     replanSession: "从这里重新规划",
-    replanning: "正在重新生成计划…"
+    replanning: "正在重新生成计划…",
+    inboxTitle: "收件箱",
+    inboxEmpty: "没有待处理事项",
+    inboxFetch: "扫描邮件",
+    inboxFetching: "扫描中...",
+    inboxConnect: "连接 Gmail",
+    inboxDisconnect: "断开连接",
+    inboxPromote: "加入任务",
+    inboxDismiss: "忽略",
+    inboxConnected: "已连接",
+    inboxNotConnected: "未连接",
+    inboxSetupHint: "请在设置中输入 Google OAuth 客户端 ID 以连接 Gmail。",
+    connectors: "连接器",
+    googleClientId: "Google 客户端 ID",
+    googleClientIdHint: "在 console.cloud.google.com 创建桌面应用 OAuth 客户端"
   }
 };
 
@@ -387,7 +454,7 @@ function App() {
   const [snapshot, setSnapshot] = useSnapshot();
   const [view, setView] = useState<View>(() => {
     const route = location.hash.replace("#/", "");
-    return route === "plan" || route === "log" || route === "history" || route === "settings" ? route : "start";
+    return route === "plan" || route === "log" || route === "history" || route === "settings" || route === "inbox" ? route : "start";
   });
   const isOverlay = location.hash.startsWith("#/overlay");
   const isBlocker = location.hash.startsWith("#/blocker");
@@ -433,6 +500,16 @@ function App() {
               </button>
             </>
           )}
+          <button className={view === "inbox" ? "active" : ""} onClick={() => setView("inbox")} style={{ position: "relative" }}>
+            <Monitor size={16} /> {t("inboxTitle")}
+            {(() => {
+              const inboxItems = (snapshot as any).inboxItems as ActionItem[] ?? [];
+              const pendingCount = inboxItems.filter((i) => i.status === "pending").length;
+              return pendingCount > 0 ? (
+                <span style={{ position: "absolute", top: 4, right: 4, width: 8, height: 8, borderRadius: "50%", background: "#ef4444", display: "inline-block" }} />
+              ) : null;
+            })()}
+          </button>
           <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>
             <Clock size={16} /> {t("history")}
           </button>
@@ -448,6 +525,7 @@ function App() {
       {!showHandoff && view === "plan" && <PlanEditor snapshot={snapshot} setSnapshot={setSnapshot} />}
       {!showHandoff && view === "log" && <SessionLog snapshot={snapshot} />}
       {!showHandoff && view === "history" && <SessionHistory />}
+      {view === "inbox" && <InboxScreen snapshot={snapshot} language={snapshot.settings.language} />}
       {view === "settings" && <SettingsScreen snapshot={snapshot} setSnapshot={setSnapshot} />}
     </main>
   );
@@ -1447,6 +1525,158 @@ function SessionHistory() {
   );
 }
 
+function InboxScreen({ snapshot, language }: { snapshot: AppSnapshot; language: "en" | "zh" }) {
+  const t = useCopy(language);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const connectors = (snapshot as any).connectors as ConnectorStatus[] ?? [];
+  const inboxItems = (snapshot as any).inboxItems as ActionItem[] ?? [];
+  const gmailConnector = connectors.find((c) => c.name === "gmail");
+  const isConnected = gmailConnector?.connected === true;
+  const pendingItems = inboxItems.filter((i) => i.status === "pending");
+  const googleClientId = (snapshot.settings as any).googleClientId as string ?? "";
+
+  async function handleConnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).connectGmail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to connect Gmail.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).disconnectGmail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to disconnect.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFetch() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).fetchInbox();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to scan inbox.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateItem(itemId: string, status: ActionItemStatus) {
+    try {
+      await (window.nerve as any).updateInboxItem(itemId, status);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update item.");
+    }
+  }
+
+  const urgencyColor: Record<ActionItemUrgency, string> = {
+    high: "#ef4444",
+    medium: "#f59e0b",
+    low: "#6b7280"
+  };
+
+  return (
+    <section className="settings-layout">
+      <div className="page-title compact">
+        <span className="eyebrow">Gmail</span>
+        <h2>{t("inboxTitle")}</h2>
+      </div>
+
+      {!googleClientId ? (
+        <div style={{ padding: "1.5rem", background: "rgba(255,255,255,0.04)", borderRadius: 8, marginBottom: "1rem" }}>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.8 }}>{t("inboxSetupHint")}</p>
+          <button onClick={() => window.nerve.openMain("/settings")}>
+            <Settings size={16} /> {t("settings")}
+          </button>
+        </div>
+      ) : !isConnected ? (
+        <div style={{ padding: "1.5rem", background: "rgba(255,255,255,0.04)", borderRadius: 8, marginBottom: "1rem" }}>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.8 }}>{t("inboxNotConnected")}</p>
+          {gmailConnector?.error && (
+            <p style={{ color: "#ef4444", fontSize: "0.8rem", marginBottom: "0.75rem" }}>{gmailConnector.error}</p>
+          )}
+          <button className="primary" disabled={busy} onClick={handleConnect}>
+            <Monitor size={16} /> {t("inboxConnect")}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem", padding: "0.75rem 1rem", background: "rgba(255,255,255,0.04)", borderRadius: 8 }}>
+            <span style={{ fontSize: "0.75rem", background: "rgba(34,197,94,0.15)", color: "#22c55e", padding: "2px 8px", borderRadius: 12, fontWeight: 600 }}>
+              {t("inboxConnected")}
+            </span>
+            {gmailConnector.email && (
+              <span style={{ opacity: 0.7, fontSize: "0.85rem" }}>{gmailConnector.email}</span>
+            )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
+              <button disabled={busy} onClick={handleFetch}>
+                <RefreshCw size={15} /> {busy ? t("inboxFetching") : t("inboxFetch")}
+              </button>
+              <button disabled={busy} onClick={handleDisconnect}>
+                {t("inboxDisconnect")}
+              </button>
+            </div>
+          </div>
+
+          {pendingItems.length === 0 ? (
+            <EmptyState icon={<Monitor size={18} />} title={t("inboxEmpty")} body="" />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              {pendingItems.map((item) => (
+                <article key={item.id} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                    <strong style={{ flex: 1, fontSize: "0.9rem" }}>{item.title}</strong>
+                    <span style={{ fontSize: "0.7rem", fontWeight: 600, padding: "2px 7px", borderRadius: 10, background: `${urgencyColor[item.urgency]}22`, color: urgencyColor[item.urgency], flexShrink: 0 }}>
+                      {item.urgency}
+                    </span>
+                  </div>
+                  {item.description && (
+                    <p style={{ fontSize: "0.8rem", opacity: 0.7, margin: 0 }}>{item.description}</p>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {item.suggestedTaskType && (
+                      <span style={{ fontSize: "0.7rem", padding: "2px 7px", borderRadius: 10, background: "rgba(255,255,255,0.08)", opacity: 0.8 }}>
+                        {item.suggestedTaskType}
+                      </span>
+                    )}
+                    {item.dueHint && (
+                      <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>
+                        <CalendarClock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />
+                        {item.dueHint}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    <button className="primary" style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "promoted")}>
+                      <Plus size={13} /> {t("inboxPromote")}
+                    </button>
+                    <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
+                      {t("inboxDismiss")}
+                    </button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {error && <p className="error-note" style={{ marginTop: "1rem" }}>{error}</p>}
+    </section>
+  );
+}
+
 function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const [settings, setSettings] = useState(snapshot.settings);
   const t = useCopy(settings.language);
@@ -1496,6 +1726,42 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
               <input type="password" value={settings.deepseekApiKey} onChange={(event) => setSettings({ ...settings, deepseekApiKey: event.target.value })} onBlur={() => save({ deepseekApiKey: settings.deepseekApiKey })} />
             </label>
           </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
+            <Monitor size={17} />
+            <h3>{t("connectors")}</h3>
+          </div>
+          <div className="settings-grid">
+            <label className="wide-field">
+              {t("googleClientId")}
+              <input
+                type="text"
+                value={(settings as any).googleClientId ?? ""}
+                onChange={(event) => setSettings({ ...settings, googleClientId: event.target.value } as any)}
+                onBlur={() => save({ googleClientId: (settings as any).googleClientId } as any)}
+                placeholder="1234567890-abc...apps.googleusercontent.com"
+              />
+              <span className="subtle" style={{ fontSize: "0.75rem", marginTop: 4, display: "block" }}>{t("googleClientIdHint")}</span>
+            </label>
+          </div>
+          {(() => {
+            const connectors = (snapshot as any).connectors as ConnectorStatus[] ?? [];
+            const gmail = connectors.find((c) => c.name === "gmail");
+            return (
+              <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginTop: "0.5rem", padding: "0.5rem 0" }}>
+                <span style={{ fontSize: "0.85rem", opacity: 0.8 }}>Gmail</span>
+                <span style={{ fontSize: "0.75rem", fontWeight: 600, padding: "2px 8px", borderRadius: 10,
+                  background: gmail?.connected ? "rgba(34,197,94,0.15)" : "rgba(255,255,255,0.06)",
+                  color: gmail?.connected ? "#22c55e" : undefined }}>
+                  {gmail?.connected ? t("inboxConnected") : t("inboxNotConnected")}
+                </span>
+                {gmail?.connected && gmail.email && (
+                  <span style={{ fontSize: "0.8rem", opacity: 0.6 }}>{gmail.email}</span>
+                )}
+              </div>
+            );
+          })()}
         </section>
         <section className="settings-section">
           <div className="settings-section-head">

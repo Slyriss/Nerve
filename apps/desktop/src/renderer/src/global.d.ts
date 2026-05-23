@@ -1,4 +1,4 @@
-import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType } from "@nerve/shared";
+import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, ActionItemStatus } from "@nerve/shared";
 
 type NerveAction = "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking";
 
@@ -24,6 +24,10 @@ interface NerveBridge {
   replanSession: () => Promise<AppSnapshot>;
   deleteAllData: () => Promise<void>;
   dismissBlocker: () => Promise<void>;
+  connectGmail: () => Promise<AppSnapshot>;
+  disconnectGmail: () => Promise<AppSnapshot>;
+  fetchInbox: () => Promise<AppSnapshot>;
+  updateInboxItem: (itemId: string, status: ActionItemStatus) => Promise<AppSnapshot>;
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => () => void;
 }
 

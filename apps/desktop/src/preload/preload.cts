@@ -30,6 +30,11 @@ const nerve = {
   replanSession: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:replanSession"),
   deleteAllData: (): Promise<void> => ipcRenderer.invoke("nerve:deleteAllData"),
   dismissBlocker: (): Promise<void> => ipcRenderer.invoke("nerve:dismissBlocker"),
+  connectGmail: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:connectGmail"),
+  disconnectGmail: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:disconnectGmail"),
+  fetchInbox: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:fetchInbox"),
+  updateInboxItem: (itemId: string, status: "pending" | "promoted" | "dismissed"): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("nerve:updateInboxItem", itemId, status),
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) => callback(snapshot);
     ipcRenderer.on("nerve:snapshot", listener);

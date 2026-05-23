@@ -29,6 +29,7 @@ export type CopyKey =
   | "privateCopilot" | "session" | "settings" | "runningSideTab" | "handoffBody"
   | "endSession" | "pauseSession" | "resumeSession"
   | "lockInMode" | "lockInModeHint" | "lockInBlockerTitle" | "lockInBack"
+  | "lockInWarningTitle" | "lockInWarningBody"
   | "physicalTask" | "topPriority" | "startOnThis" | "addTask"
   | "tasksDueToday" | "nothingUrgent"
   | "pausedTitle" | "pausedBody" | "ready" | "goal" | "taskType" | "mode"

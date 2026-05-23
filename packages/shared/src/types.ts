@@ -392,6 +392,7 @@ export interface AppSnapshot {
   bannedSiteAlert: BannedSiteAlert | null;
   bannedSiteStrikeCount: number;
   lockInAlert: boolean;
+  lockInWarningStartedAt: string | null;
   screenshotFolder: string;
   connectors: ConnectorStatus[];
   inboxItems: ActionItem[];

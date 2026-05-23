@@ -18,6 +18,7 @@ import { SessionLog } from "./components/LogScreen";
 import { SessionHistory } from "./components/HistoryScreen";
 import { InboxScreen } from "./components/InboxScreen";
 import { SettingsScreen } from "./components/SettingsScreen";
+import { appDisplayName, brandIconLogo, brandWordLogo } from "./lib/catAssets";
 import "./styles.css";
 
 // suppress unused import warnings — these are used in JSX below
@@ -46,7 +47,7 @@ function App() {
     }
   }, [sessionOpen]);
 
-  if (!snapshot) return <div className="loading">别Meow鱼</div>;
+  if (!snapshot) return <div className="loading"><img src={brandIconLogo} alt="" /> {appDisplayName}</div>;
   if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
 
@@ -56,9 +57,13 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="mark">喵</div>
+          <div className="mark"><img src={brandIconLogo} alt="" /></div>
           <div>
-            <h1>别Meow鱼</h1>
+            <h1 className="brand-title" aria-label={appDisplayName}>
+              <span>别</span>
+              <img className="brand-wordmark" src={brandWordLogo} alt="meow" />
+              <span>鱼</span>
+            </h1>
             <p>{t("privateCopilot")}</p>
           </div>
         </div>

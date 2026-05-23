@@ -7,6 +7,8 @@ import { timeLeft, completionStats, stateLabel, playBannedSiteSound } from "../l
 import { StepCard } from "./StepCard";
 import { SideTimetable } from "./SideTimetable";
 import { BannedSiteCard } from "./BannedSiteCard";
+import { CatMascot } from "./CatMascot";
+import { appDisplayName, brandIconLogo, catMoodForSnapshot, lockInWarningLevel } from "../lib/catAssets";
 
 export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const expanded = snapshot.overlayExpanded || Boolean(snapshot.bannedSiteAlert);
@@ -15,9 +17,11 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
   const total = totalRaw || 1;
   const t = useCopy(snapshot.settings.language);
   const latestState = snapshot.observations[0]?.userState;
+  const catMood = catMoodForSnapshot(snapshot);
+  const warningLevel = lockInWarningLevel(snapshot.lockInWarningStartedAt);
   const [sideView, setSideView] = useState<"step" | "timetable">("step");
   const [confirmEnd, setConfirmEnd] = useState(false);
-  useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt || snapshot.delayUntil || snapshot.breakReminderAt ? 1000 : 30_000);
+  useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt || snapshot.delayUntil || snapshot.breakReminderAt || snapshot.lockInWarningStartedAt ? 1000 : 30_000);
   const prevAlertRef = useRef<typeof snapshot.bannedSiteAlert>(null);
   useEffect(() => {
     if (snapshot.settings.soundEnabled && snapshot.bannedSiteAlert && !prevAlertRef.current) {
@@ -34,7 +38,13 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
     <div className={`overlay ${expanded ? "expanded" : "slim"} ${snapshot.bannedSiteAlert ? "banned-active" : ""}`} style={{ opacity }}>
       {!expanded ? (
         <div className="overlay-slim">
-          <div className="mark">喵</div>
+          <div className="slim-screen">
+            {snapshot.session ? (
+              <CatMascot mood={catMood} size="tiny" warningLevel={warningLevel} className="overlay-slim-cat" />
+            ) : (
+              <img className="slim-screen-logo" src={brandIconLogo} alt="" />
+            )}
+          </div>
           <div className="vertical-status">{snapshot.session?.status || "idle"}</div>
           {snapshot.voiceState !== "idle" && <div className={`slim-voice-label ${snapshot.voiceState}`}>{snapshot.voiceState}</div>}
           {!snapshot.bannedSiteAlert && <VoiceCoach snapshot={snapshot} compact />}
@@ -50,7 +60,10 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
         <div className="overlay-expanded">
           <div className="overlay-head">
             <div>
-              <strong>别Meow鱼</strong>
+              <span className="overlay-brand">
+                <img src={brandIconLogo} alt="" />
+                <strong>{appDisplayName}</strong>
+              </span>
               <span>{snapshot.session?.status === "completed" ? t("sessionComplete") : t("nextStep")}</span>
             </div>
             <span className={`state-pill ${snapshot.bannedSiteAlert ? "banned" : latestState || "unknown"}`}>
@@ -73,6 +86,12 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
           <div className="overlay-scroll-area">
             {sideView === "step" ? (
               <>
+                {snapshot.lockInWarningStartedAt && !snapshot.bannedSiteAlert && !snapshot.lockInAlert && (
+                  <div className="lockin-warning-strip">
+                    <CatMascot mood={catMood} size="small" message={t("lockInWarningTitle")} warningLevel={warningLevel} />
+                    <p>{t("lockInWarningBody")}</p>
+                  </div>
+                )}
                 {snapshot.bannedSiteAlert ? <BannedSiteCard snapshot={snapshot} /> : <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact voiceSlot={<VoiceCoach snapshot={snapshot} />} />}
                 {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
                   <div className="timer quiet">
@@ -293,4 +312,3 @@ function VoiceCoach({ snapshot, compact = false }: { snapshot: AppSnapshot; comp
     </div>
   );
 }
-

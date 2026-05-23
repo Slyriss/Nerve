@@ -104,17 +104,17 @@ export async function startGmailOAuth(clientId: string, clientSecret = ""): Prom
       const returnedState = url.searchParams.get("state");
       res.writeHead(200, { "Content-Type": "text/html" });
       if (code && returnedState === state) {
-        res.end("<html><body><h2>Nerve: Gmail connected! You can close this tab.</h2></body></html>");
+        res.end("<html><body><h2>别meow鱼: Gmail connected! You can close this tab.</h2></body></html>");
         clearTimeout(timer);
         server.close();
         resolve(code);
       } else if (code) {
-        res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
+        res.end("<html><body><h2>别meow鱼: Authorization failed. Please try again.</h2></body></html>");
         clearTimeout(timer);
         server.close();
         reject(new Error("OAuth state mismatch"));
       } else {
-        res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
+        res.end("<html><body><h2>别meow鱼: Authorization failed. Please try again.</h2></body></html>");
         clearTimeout(timer);
         server.close();
         reject(new Error(error ?? "OAuth cancelled"));

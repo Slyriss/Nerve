@@ -4,6 +4,8 @@ import type { AppSnapshot } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
 import { timeLeft, hasPastDeadline, isPast, completionStats, nextScheduledLabel } from "../lib/utils";
+import { catMoodForSnapshot, lockInWarningLevel } from "../lib/catAssets";
+import { CatMascot } from "./CatMascot";
 
 export function StepCard({
   snapshot,
@@ -31,12 +33,14 @@ export function StepCard({
   const t = useCopy(snapshot.settings.language);
   const paused = snapshot.session?.status === "paused";
   const { completed, percent, total } = completionStats(snapshot.steps);
-  useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt || snapshot.delayUntil ? 1000 : 30_000);
+  const catMood = catMoodForSnapshot(snapshot);
+  const warningLevel = lockInWarningLevel(snapshot.lockInWarningStartedAt);
+  useNow(snapshot.thinkingPauseUntil || snapshot.breakEndsAt || snapshot.delayUntil || snapshot.lockInWarningStartedAt ? 1000 : 30_000);
   async function action(type: "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "endBreak" | "repeatRoutine") {
     setSnapshot(await window.nerve.action(type));
   }
   if (!snapshot.session) {
-    return <div className="step-card"><p>{t("noSession")}</p></div>;
+    return <div className="step-card"><CatMascot mood="calm" size="small" /><p>{t("noSession")}</p></div>;
   }
   if (breakActive) {
     return (
@@ -48,6 +52,7 @@ export function StepCard({
           </div>
           <span className="task-badge">{t("breakReminders")}</span>
         </div>
+        <CatMascot mood="break" size={compact ? "small" : "large"} message={t("breakTime")} timerText={timeLeft(snapshot.breakEndsAt)} className="break-mascot" />
         <p className="muted">{step ? `${t("getBackToWork")}: ${step.title}` : t("waitingRoutineBody")}</p>
         <button className="primary" onClick={() => action("endBreak")}>
           <Play size={16} /> {t("getBackToWork")}
@@ -68,6 +73,7 @@ export function StepCard({
           </div>
         </div>
         <p className="muted">{t("waitingRoutineBody")}</p>
+        <CatMascot mood="sleep" size={compact ? "small" : "medium"} />
         {snapshot.steps.some((candidate) => candidate.routineNextAt) && (
           <div className="step-meta">
             <span>{t("routineNext")} {nextScheduledLabel(snapshot.steps)}</span>
@@ -86,6 +92,7 @@ export function StepCard({
           </div>
           <span className="task-badge">{step.taskType}</span>
         </div>
+        <CatMascot mood="calm" size={compact ? "small" : "medium"} />
         <p className="muted">{t("pausedBody")}</p>
         <button className="primary" onClick={async () => setSnapshot(await window.nerve.resumeSession())}>
           <Play size={16} /> {t("resumeSession")}
@@ -105,6 +112,12 @@ export function StepCard({
       <div className="progress-line" aria-label={`${percent}% complete`}>
         <span style={{ width: `${percent}%` }} />
       </div>
+      <CatMascot
+        mood={catMood}
+        size={compact ? "small" : "medium"}
+        message={snapshot.lockInWarningStartedAt ? t("lockInWarningTitle") : undefined}
+        warningLevel={warningLevel}
+      />
       <div className="step-meta">
         <span>{completed}/{total} complete</span>
         {step.dueAt && <span className={isPast(step.dueAt) ? "past-due-chip" : ""}>Due {new Date(step.dueAt).toLocaleString()}</span>}

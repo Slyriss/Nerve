@@ -80,6 +80,8 @@ let breakEndsAt: string | null = null;
 let bannedSiteAlert: BannedSiteAlert | null = null;
 let bannedSiteStrikeCount = 0;
 let lockInAlert = false;
+let lockInWarningStartedAt: string | null = null;
+let lockInWarningTimer: NodeJS.Timeout | null = null;
 let lastBannedSiteEventKey: string | null = null;
 let lastBannedSiteEventAt = 0;
 let currentBreadcrumbId: string | null = null;
@@ -96,6 +98,10 @@ const overlayExpandedWidth = 260;
 const overlayBannedWidth = 320;
 const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 const MAX_REMINDER_WAKE_MS = 60_000;
+const LOCK_IN_BLOCKER_DELAY_MS = 20_000;
+const APP_DISPLAY_NAME = "别meow鱼";
+
+app.setName(APP_DISPLAY_NAME);
 
 const settingOptions = {
   aiProvider: ["deepseek"],
@@ -1851,9 +1857,12 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
   const rule = bannedSiteMatch(settings, context);
   if (!rule) {
     bannedSiteAlert = null;
-    hideBlockerWindow();
+    if (!lockInAlert && !lockInWarningStartedAt) {
+      hideBlockerWindow();
+    }
     return false;
   }
+  clearLockInState();
   const timestamp = now();
   bannedSiteAlert = {
     rule,
@@ -1883,6 +1892,50 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
     }
   }
   return true;
+}
+
+function clearLockInWarning() {
+  lockInWarningStartedAt = null;
+  if (lockInWarningTimer) clearTimeout(lockInWarningTimer);
+  lockInWarningTimer = null;
+}
+
+function clearLockInState() {
+  clearLockInWarning();
+  lockInAlert = false;
+}
+
+function triggerLockInBlocker(sessionId: string) {
+  const session = getCurrentActiveSession();
+  if (!session || session.id !== sessionId || !session.lockInMode || !lockInWarningStartedAt || bannedSiteAlert) return;
+  lockInAlert = true;
+  overlayExpanded = true;
+  overlaySuppressUntil = 0;
+  showBlockerWindow();
+  addEvent(session.id, "lock_in_triggered", "Lock-in mode: refocus on your task.", {});
+  broadcast();
+}
+
+function startLockInWarning(session: SessionRecord) {
+  if (lockInAlert) return;
+  if (!lockInWarningStartedAt) {
+    lockInWarningStartedAt = now();
+    addEvent(session.id, "lock_in_warning", "Lock-in mode warning: return to the current task.", {});
+  }
+  if (!lockInWarningTimer) {
+    lockInWarningTimer = setTimeout(() => {
+      lockInWarningTimer = null;
+      triggerLockInBlocker(session.id);
+    }, LOCK_IN_BLOCKER_DELAY_MS);
+  }
+  overlayExpanded = true;
+  overlaySuppressUntil = 0;
+}
+
+function calmLockInWarning() {
+  if (!lockInWarningStartedAt && !lockInAlert) return;
+  clearLockInState();
+  if (!bannedSiteAlert) hideBlockerWindow();
 }
 
 function lastUsefulContext(sessionId: string): { activeApp: string; windowTitle: string } | null {
@@ -2060,12 +2113,14 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       }
     }
 
-    if (session.lockInMode && observation.userState === "unproductive_drift" && !thinkingActive) {
-      lockInAlert = true;
-      overlayExpanded = true;
-      overlaySuppressUntil = 0;
-      showBlockerWindow();
-      addEvent(session.id, "lock_in_triggered", "Lock-in mode: refocus on your task.", { userState: observation.userState });
+    if (session.lockInMode && !thinkingActive) {
+      if (observation.userState === "unproductive_drift" || observation.userState === "stuck") {
+        startLockInWarning(session);
+      } else if (observation.userState === "on_task" || observation.userState === "progress" || observation.userState === "productive_drift") {
+        calmLockInWarning();
+      }
+    } else if (session.lockInMode && thinkingActive) {
+      calmLockInWarning();
     }
 
     db.prepare(`INSERT INTO ai_observations (
@@ -2200,7 +2255,7 @@ function checkBreakReminders(): boolean {
     if (Notification.isSupported()) {
       const n = new Notification({
         title: "Break time",
-        body: `Take ${settings.breakDurationMinutes} min. Nerve will check back in.`,
+        body: `Take ${settings.breakDurationMinutes} min. ${APP_DISPLAY_NAME} will check back in.`,
         silent: false
       });
       n.show();
@@ -2225,6 +2280,7 @@ function stopSessionLoops() {
   clearDelayTimer();
   clearReminderLoop();
   clearBreakSchedule();
+  clearLockInState();
   finishCurrentBreadcrumb();
 }
 
@@ -2274,6 +2330,7 @@ function snapshot(): AppSnapshot {
     bannedSiteAlert,
     bannedSiteStrikeCount,
     lockInAlert,
+    lockInWarningStartedAt,
     screenshotFolder: screenshotDir(),
     connectors: getConnectorStatuses(),
     inboxItems: getVisibleInboxItems(),
@@ -2384,7 +2441,7 @@ function showBlockerWindow() {
 }
 
 function hideBlockerWindow() {
-  lockInAlert = false;
+  clearLockInState();
   if (blockerWindow && !blockerWindow.isDestroyed()) {
     blockerWindow.hide();
   }
@@ -2462,13 +2519,16 @@ function registerIpc() {
   });
   ipcMain.handle("nerve:transcribeVoice", async (_event, audioBase64: string): Promise<VoiceTranscriptionResponse> => handleVoiceTranscription(audioBase64));
   ipcMain.handle("nerve:setOverlayExpanded", (_event, expanded: boolean) => {
-    overlayExpanded = bannedSiteAlert ? true : expanded;
+    overlayExpanded = bannedSiteAlert || lockInAlert || lockInWarningStartedAt ? true : expanded;
     overlaySuppressUntil = overlayExpanded ? 0 : Date.now() + MANUAL_COLLAPSE_COOLDOWN_MS;
     applyOverlayBounds();
     broadcast();
   });
   ipcMain.handle("nerve:openMain", (_event, route = "/") => createMainWindow(route));
-  ipcMain.handle("nerve:dismissBlocker", () => hideBlockerWindow());
+  ipcMain.handle("nerve:dismissBlocker", () => {
+    hideBlockerWindow();
+    broadcast();
+  });
   ipcMain.handle("nerve:openScreenshotFolder", () => shell.openPath(screenshotDir()));
   ipcMain.handle("nerve:updateSettings", (_event, patch: Partial<NerveSettings>) => {
     updateSettings(patch);

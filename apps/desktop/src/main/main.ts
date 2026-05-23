@@ -1,5 +1,5 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, net, Notification, protocol, safeStorage, screen, shell } from "electron";
-import { CaptureService, getActiveWindowFallback, isNoisyDetection, type ScreenCapture } from "./capture.js";
+import { app, BrowserWindow, globalShortcut, ipcMain, net, Notification, powerMonitor, protocol, safeStorage, screen, shell } from "electron";
+import { CaptureService, capturePrimaryScreen, getActiveWindowFallback, imageHash, isNoisyDetection, type ScreenCapture } from "./capture.js";
 import { AnalysisService } from "./analysis.js";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
@@ -10,6 +10,7 @@ import { fileURLToPath } from "node:url";
 import {
   DeepSeekAIProvider,
   defaultSettings,
+  voiceCoachPrompt,
   type AIObservationRecord,
   type AIProvider,
   type AnalyzeScreenInput,
@@ -32,7 +33,12 @@ import {
   type ActionItem,
   type ActionItemStatus,
   type ConnectorName,
-  type ConnectorStatus
+  type ConnectorStatus,
+  type VoiceCoachMessage,
+  type VoiceCoachResponse,
+  type VoiceGuidance,
+  type VoiceRuntimeState,
+  type VoiceTranscriptionResponse
 } from "@nerve/shared";
 import { schema, settingsTable } from "./db/schema.js";
 import { DEFAULT_GOOGLE_CLIENT_ID, startGmailOAuth, refreshGmailToken, fetchGmailMessages, encryptToken, decryptToken, type RawGmailMessage } from "./connectors/gmail.js";
@@ -79,6 +85,9 @@ let lastBannedSiteEventAt = 0;
 let currentBreadcrumbId: string | null = null;
 let currentBreadcrumbKey: string | null = null;
 let currentBreadcrumbStartedAt: string | null = null;
+let voiceHistory: VoiceCoachMessage[] = [];
+let voiceGuidance: VoiceGuidance | null = null;
+let voiceState: VoiceRuntimeState = "idle";
 let cachedSettings: NerveSettings | null = null;
 let isQuitting = false;
 
@@ -840,6 +849,7 @@ function getSettings(): NerveSettings {
   for (const row of rows) settings[row.key] = JSON.parse(row.value);
   const result = settings as unknown as NerveSettings;
   result.deepseekApiKey = decryptApiKey(result.deepseekApiKey ?? "");
+  result.elevenLabsApiKey = decryptApiKey(result.elevenLabsApiKey ?? "");
   result.googleClientSecret = decryptApiKey(result.googleClientSecret ?? "");
   cachedSettings = result;
   return cachedSettings;
@@ -1049,6 +1059,12 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (typeof patch.deepseekModel === "string" && patch.deepseekModel.trim()) {
     normalized.deepseekModel = patch.deepseekModel.trim();
+  }
+  if (typeof patch.elevenLabsApiKey === "string") {
+    normalized.elevenLabsApiKey = encryptApiKey(patch.elevenLabsApiKey.trim());
+  }
+  if (typeof patch.elevenLabsVoiceId === "string") {
+    normalized.elevenLabsVoiceId = patch.elevenLabsVoiceId.trim();
   }
   if (
     patch.screenshotIntervalSeconds &&
@@ -1533,7 +1549,7 @@ function checkReminders() {
     });
     if (Notification.isSupported()) {
       const notification = new Notification({
-        title: routineReminder ? "Nerve routine" : "Nerve reminder",
+        title: routineReminder ? "别Meow鱼 routine" : "别Meow鱼 reminder",
         body: reminder.dueAt ? `${reminder.title} is due ${new Date(reminder.dueAt).toLocaleTimeString()}. ${reminder.message}` : reminder.message,
         silent: false
       });
@@ -1607,6 +1623,192 @@ function provider(settings = getSettings()): AIProvider {
 
 const analysisService = new AnalysisService(() => provider());
 
+async function readErrorBody(response: Response) {
+  try {
+    const text = await response.text();
+    return text.slice(0, 300);
+  } catch {
+    return response.statusText;
+  }
+}
+
+function cleanAudioBase64(input: string) {
+  const trimmed = input.trim();
+  return trimmed.includes(",") ? trimmed.slice(trimmed.indexOf(",") + 1) : trimmed;
+}
+
+async function transcribeWithElevenLabs(audioBase64: string, settings: NerveSettings) {
+  const apiKey = settings.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY || process.env.NERVE_ELEVENLABS_API_KEY || "";
+  if (!apiKey) throw new Error("ElevenLabs API key is missing.");
+  const audioBytes = Buffer.from(cleanAudioBase64(audioBase64), "base64");
+  if (audioBytes.length === 0) throw new Error("No audio was recorded.");
+  const form = new FormData();
+  form.append("model_id", "scribe_v1");
+  form.append("file", new Blob([new Uint8Array(audioBytes)], { type: "audio/webm" }), "nerve-voice.webm");
+  const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
+    method: "POST",
+    headers: { "xi-api-key": apiKey },
+    body: form
+  });
+  if (!response.ok) throw new Error(`ElevenLabs transcription failed: ${response.status} ${await readErrorBody(response)}`);
+  const data = await response.json() as { text?: string };
+  const text = data.text?.trim();
+  if (!text) throw new Error("ElevenLabs returned an empty transcription.");
+  return text;
+}
+
+async function captureFreshScreenForVoice(): Promise<ScreenCapture> {
+  const { image, sourceName } = await capturePrimaryScreen();
+  const detected = await getActiveWindowFallback(sourceName);
+  const noisy = isNoisyDetection(detected.activeApp, detected.windowTitle);
+  return {
+    image,
+    sourceName,
+    activeApp: detected.activeApp,
+    windowTitle: detected.windowTitle,
+    matchText: detected.matchText,
+    hash: imageHash(image),
+    changed: true,
+    idleSeconds: powerMonitor.getSystemIdleTime(),
+    trigger: "voice",
+    noisy
+  };
+}
+
+async function captureAndAnalyzeForVoice(sessionId: string): Promise<AIObservationRecord | null> {
+  try {
+    const capture = await captureFreshScreenForVoice();
+    await handleCapture(capture, sessionId);
+    if (!isCurrentSessionActive(sessionId)) return null;
+    const row = db
+      .prepare("SELECT * FROM ai_observations WHERE session_id = ? ORDER BY created_at DESC LIMIT 1")
+      .get(sessionId) as any;
+    return row ? rowObservation(row) : null;
+  } catch (error) {
+    if (isCurrentSessionActive(sessionId)) {
+      addEvent(sessionId, "voice_capture_error", "Voice follow-up could not refresh screen context.", { error: String(error) });
+      broadcast();
+    }
+    return null;
+  }
+}
+
+async function generateVoiceCoachText(transcription: string, settings: NerveSettings, latestObservation: AIObservationRecord | null) {
+  const session = getCurrentSession();
+  if (!session || session.status === "completed") throw new Error("Start a session before using voice coach.");
+  const steps = getSteps(session.id);
+  const recentEvents = (db.prepare("SELECT * FROM events WHERE session_id = ? ORDER BY created_at DESC LIMIT 8").all(session.id) as any[]).map(rowEvent);
+  const recentBreadcrumbs = (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at DESC LIMIT 8").all(session.id) as any[]).map(rowBreadcrumb).reverse();
+  const prompt = voiceCoachPrompt({
+    transcription,
+    sessionGoal: session.goal,
+    sessionStatus: session.status,
+    taskTypes: session.taskTypes,
+    currentStep: getActiveStep(session.id),
+    steps,
+    recentEvents,
+    recentBreadcrumbs,
+    latestObservation,
+    voiceHistory,
+    language: settings.language
+  });
+  const apiKey = settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "";
+  if (!apiKey) throw new Error("DeepSeek API key is missing.");
+  const response = await fetch("https://api.deepseek.com/chat/completions", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${apiKey}`
+    },
+    body: JSON.stringify({
+      model: settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat",
+      temperature: 0.35,
+      max_tokens: 220,
+      messages: [
+        { role: "system", content: "You are Nerve, a concise ADHD voice coach. Reply naturally, not JSON." },
+        { role: "user", content: prompt }
+      ]
+    })
+  });
+  if (!response.ok) throw new Error(`DeepSeek voice coach failed: ${response.status} ${await readErrorBody(response)}`);
+  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
+  const text = data.choices?.[0]?.message?.content?.trim();
+  if (!text) throw new Error("DeepSeek returned no voice coach response.");
+  return text.slice(0, 1200);
+}
+
+async function synthesizeWithElevenLabs(text: string, settings: NerveSettings) {
+  const apiKey = settings.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY || process.env.NERVE_ELEVENLABS_API_KEY || "";
+  const voiceId = settings.elevenLabsVoiceId || process.env.ELEVENLABS_VOICE_ID || process.env.NERVE_ELEVENLABS_VOICE_ID || "";
+  if (!apiKey) throw new Error("ElevenLabs API key is missing.");
+  if (!voiceId) throw new Error("ElevenLabs voice ID is missing.");
+  const response = await fetch(`https://api.elevenlabs.io/v1/text-to-speech/${encodeURIComponent(voiceId)}`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "audio/mpeg",
+      "xi-api-key": apiKey
+    },
+    body: JSON.stringify({
+      text,
+      model_id: "eleven_multilingual_v2",
+      voice_settings: {
+        stability: 0.48,
+        similarity_boost: 0.72,
+        style: 0.12,
+        use_speaker_boost: true
+      }
+    })
+  });
+  if (!response.ok) throw new Error(`ElevenLabs speech failed: ${response.status} ${await readErrorBody(response)}`);
+  return Buffer.from(await response.arrayBuffer()).toString("base64");
+}
+
+async function handleVoiceMessage(audioBase64: string): Promise<VoiceCoachResponse> {
+  if (typeof audioBase64 !== "string" || !audioBase64.trim()) {
+    throw new Error("No audio was recorded.");
+  }
+  const settings = getSettings();
+  const session = getCurrentSession();
+  if (!session || session.status !== "active") throw new Error("Start an active session before using voice coach.");
+  voiceState = "thinking";
+  broadcast();
+  const freshContextPromise = captureAndAnalyzeForVoice(session.id);
+  try {
+    const transcription = await transcribeWithElevenLabs(audioBase64, settings);
+    const latestObservation = await freshContextPromise;
+    const response = await generateVoiceCoachText(transcription, settings, latestObservation);
+    const speech = await synthesizeWithElevenLabs(response, settings);
+    voiceHistory = [...voiceHistory.slice(-18), { role: "user", content: transcription }, { role: "assistant", content: response }];
+    voiceGuidance = {
+      transcription,
+      response,
+      suggestedNextAction: latestObservation?.suggestedNextAction ?? null,
+      stepId: latestObservation?.stepId ?? getActiveStep(session.id)?.id ?? null,
+      activeApp: null,
+      windowTitle: null,
+      createdAt: now()
+    };
+    voiceState = "speaking";
+    addEvent(session.id, "voice_coach", response, { transcription, stepId: voiceGuidance.stepId });
+    overlayExpanded = true;
+    broadcast();
+    return { transcription, response, audioBase64: speech };
+  } catch (error) {
+    voiceState = "error";
+    broadcast();
+    throw error;
+  }
+}
+
+async function handleVoiceTranscription(audioBase64: string): Promise<VoiceTranscriptionResponse> {
+  if (typeof audioBase64 !== "string" || !audioBase64.trim()) {
+    throw new Error("No audio was recorded.");
+  }
+  const transcription = await transcribeWithElevenLabs(audioBase64, getSettings());
+  return { transcription };
+}
+
 function classifyRelevance(appName: string, windowTitle: string): BreadcrumbRelevance {
   const text = `${appName} ${windowTitle}`;
   if (
@@ -1674,7 +1876,7 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
     });
     if (Notification.isSupported()) {
       new Notification({
-        title: "Nerve",
+        title: "别Meow鱼",
         body: `Leave ${rule} and return to your task.`,
         silent: false
       }).show();
@@ -2075,7 +2277,9 @@ function snapshot(): AppSnapshot {
     screenshotFolder: screenshotDir(),
     connectors: getConnectorStatuses(),
     inboxItems: getVisibleInboxItems(),
-    hasGoogleClientSecret: !!getSettings().googleClientSecret
+    hasGoogleClientSecret: !!getSettings().googleClientSecret,
+    voiceGuidance,
+    voiceState
   };
 }
 
@@ -2188,9 +2392,27 @@ function hideBlockerWindow() {
 
 function registerGlobalHotkeys() {
   globalShortcut.unregister("Super+Shift+N");
-  const registered = globalShortcut.register("Super+Shift+N", toggleOverlayFromHotkey);
-  if (!registered) {
+  globalShortcut.unregister("Alt+M");
+  const overlayRegistered = globalShortcut.register("Super+Shift+N", toggleOverlayFromHotkey);
+  const voiceRegistered = globalShortcut.register("Alt+M", () => {
+    if (getCurrentActiveSession()) {
+      overlayExpanded = true;
+      overlaySuppressUntil = 0;
+    }
+    if (!overlayWindow || overlayWindow.isDestroyed()) {
+      createOverlayWindow();
+    } else {
+      overlayWindow.showInactive();
+      overlayWindow.webContents.send("nerve:toggleVoice");
+    }
+    mainWindow?.webContents.send("nerve:toggleVoice");
+    broadcast();
+  });
+  if (!overlayRegistered) {
     console.warn("[nerve] Win+Shift+N could not be registered.");
+  }
+  if (!voiceRegistered) {
+    console.warn("[nerve] Alt+M could not be registered.");
   }
 }
 
@@ -2206,7 +2428,7 @@ function createMainWindow(route = "/") {
     height: 760,
     minWidth: 860,
     minHeight: 640,
-    title: "Nerve",
+    title: "别Meow鱼",
     backgroundColor: "#00000000",
     backgroundMaterial: "mica",
     webPreferences: {
@@ -2229,6 +2451,16 @@ function createMainWindow(route = "/") {
 
 function registerIpc() {
   ipcMain.handle("nerve:getSnapshot", () => snapshot());
+  ipcMain.handle("nerve:voiceMessage", async (_event, audioBase64: string): Promise<VoiceCoachResponse> => handleVoiceMessage(audioBase64));
+  ipcMain.handle("nerve:setVoiceState", (_event, state: VoiceRuntimeState) => {
+    voiceState = state;
+    if (state !== "idle" && getCurrentActiveSession()) {
+      overlayExpanded = true;
+      overlaySuppressUntil = 0;
+    }
+    broadcast();
+  });
+  ipcMain.handle("nerve:transcribeVoice", async (_event, audioBase64: string): Promise<VoiceTranscriptionResponse> => handleVoiceTranscription(audioBase64));
   ipcMain.handle("nerve:setOverlayExpanded", (_event, expanded: boolean) => {
     overlayExpanded = bannedSiteAlert ? true : expanded;
     overlaySuppressUntil = overlayExpanded ? 0 : Date.now() + MANUAL_COLLAPSE_COOLDOWN_MS;
@@ -2272,6 +2504,9 @@ function registerIpc() {
   ipcMain.handle("nerve:deleteAllData", () => {
     stopSessionLoops();
     activeSessionId = null;
+    voiceHistory = [];
+    voiceGuidance = null;
+    voiceState = "idle";
     overlayExpanded = false;
     overlaySuppressUntil = 0;
     thinkingPauseUntil = null;
@@ -2469,6 +2704,9 @@ function registerIpc() {
     const planSteps = sortPlanStepsBySchedule(normalizePlanSteps(plan.steps, taskType === "Mixed work" ? taskTypes[0] : taskType, goal));
 
     stopSessionLoops();
+    voiceHistory = [];
+    voiceGuidance = null;
+    voiceState = "idle";
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status IN ('active', 'paused')").run(timestamp, timestamp);
     db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at, lock_in_mode) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?, ?)").run(
       sessionId,
@@ -2535,6 +2773,9 @@ function registerIpc() {
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE id = ?")
       .run(timestamp, timestamp, session.id);
     stopSessionLoops();
+    voiceHistory = [];
+    voiceGuidance = null;
+    voiceState = "idle";
     thinkingPauseUntil = null;
     bannedSiteAlert = null;
     hideBlockerWindow();

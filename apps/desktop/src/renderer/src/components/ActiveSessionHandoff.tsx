@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { Eye, ListChecks, Pause, Play, Plus } from "lucide-react";
+import { Eye, ListChecks, Pause, Play, Plus, SquarePen } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import type { View } from "../lib/types";
@@ -30,7 +30,7 @@ export function ActiveSessionHandoff({
   return (
     <section className="handoff-layout">
       <div className="handoff-panel">
-        <div className="mark">N</div>
+        <div className="mark">喵</div>
         <h2>{paused ? t("pausedTitle") : t("runningSideTab")}</h2>
         <p className="muted">{paused ? t("pausedBody") : t("handoffBody")}</p>
         <div className="button-row">
@@ -53,16 +53,25 @@ export function ActiveSessionHandoff({
           )}
           <button className="danger" onClick={async () => setSnapshot(await window.nerve.endSession())}>{t("endSession")}</button>
         </div>
-        <div className="quick-add-row">
-          <input
-            placeholder={t("addTask")}
-            value={quickTitle}
-            onChange={(event) => setQuickTitle(event.target.value)}
-            onKeyDown={(event) => { if (event.key === "Enter") void addQuick(); }}
-          />
-          <button onClick={addQuick} disabled={!quickTitle.trim()}><Plus size={14} /></button>
-        </div>
-        <p className="subtle">{t("hotkeyHint")}</p>
+        <section className="handoff-add-section">
+          <div className="handoff-add-head">
+            <SquarePen size={16} />
+            <div>
+              <h3>Add to plan</h3>
+              <p>Capture one task without leaving the session.</p>
+            </div>
+          </div>
+          <div className="quick-add-row">
+            <input
+              placeholder={t("addTask")}
+              value={quickTitle}
+              onChange={(event) => setQuickTitle(event.target.value)}
+              onKeyDown={(event) => { if (event.key === "Enter") void addQuick(); }}
+            />
+            <button onClick={addQuick} disabled={!quickTitle.trim()} title="Add task"><Plus size={15} /></button>
+          </div>
+          <p className="subtle">{t("hotkeyHint")}</p>
+        </section>
       </div>
     </section>
   );

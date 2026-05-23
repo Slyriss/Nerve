@@ -46,7 +46,7 @@ function App() {
     }
   }, [sessionOpen]);
 
-  if (!snapshot) return <div className="loading">Nerve</div>;
+  if (!snapshot) return <div className="loading">别Meow鱼</div>;
   if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
 
@@ -56,9 +56,9 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="brand">
-          <div className="mark">N</div>
+          <div className="mark">喵</div>
           <div>
-            <h1>Nerve</h1>
+            <h1>别Meow鱼</h1>
             <p>{t("privateCopilot")}</p>
           </div>
         </div>

@@ -1,4 +1,4 @@
-import type { AnalyzeScreenInput, GeneratePlanInput } from "./types.js";
+import type { AnalyzeScreenInput, GeneratePlanInput, VoiceCoachPromptInput } from "./types.js";
 
 export const toneRules = [
   "Calm",
@@ -147,4 +147,76 @@ Atomization level: ${input.atomizationLevel}
 Thinking pause active: ${input.thinkingPauseActive}
 Recent breadcrumbs: ${JSON.stringify(input.recentBreadcrumbs)}
 Screen summary: ${input.screenSummary || "none"}`;
+}
+
+export function voiceCoachPrompt(input: VoiceCoachPromptInput): string {
+  const stepLines = input.steps
+    .slice(0, 8)
+    .map((step, index) => `${index + 1}. [${step.status}] ${step.title}: ${step.nextAction}`)
+    .join("\n");
+  const historyLines = input.voiceHistory
+    .slice(-10)
+    .map((message) => `${message.role === "user" ? "User" : "Nerve"}: ${message.content}`)
+    .join("\n");
+  const eventLines = input.recentEvents
+    .slice(0, 6)
+    .map((event) => `- ${event.type}: ${event.message}`)
+    .join("\n");
+  const breadcrumbLines = input.recentBreadcrumbs
+    .slice(-6)
+    .map((breadcrumb) => `- ${breadcrumb.appName}: ${breadcrumb.windowTitle} (${breadcrumb.relevance})`)
+    .join("\n");
+  const screenContext = input.latestObservation
+    ? [
+        `User state: ${input.latestObservation.userState}`,
+        `Task relevance: ${input.latestObservation.taskRelevance}`,
+        `Progress: ${input.latestObservation.progressState}`,
+        `Active context: ${input.latestObservation.activeContext}`,
+        `Visible change: ${input.latestObservation.visibleChangeSummary}`,
+        `Suggested next action: ${input.latestObservation.suggestedNextAction}`,
+        `Explanation: ${input.latestObservation.conciseExplanation}`
+      ].join("\n")
+    : "No fresh screen analysis was available.";
+
+  return `You are Nerve's voice coach inside a private ADHD task co-pilot.
+
+Tone rules:
+- ${toneRules}
+- Supportive, direct, and concrete.
+- No lectures.
+- No long analysis.
+- If the user complains, validate briefly, then give one concrete physical action.
+- If the user asks what to do, answer with the smallest next physical move.
+- If the user is off-task or overwhelmed, reduce scope instead of adding pressure.
+
+Response language: ${responseLanguage(input.language)}
+
+Speak naturally in 1 to 3 short sentences. Do not return JSON.
+
+Session status: ${input.sessionStatus}
+Session goal: ${input.sessionGoal}
+Session scopes: ${input.taskTypes.join(", ")}
+
+Current step:
+${input.currentStep ? `${input.currentStep.title}\nNext action: ${input.currentStep.nextAction}\nExplanation: ${input.currentStep.explanation}` : "No active step."}
+
+Plan:
+${stepLines || "No plan steps."}
+
+Recent app context:
+${breadcrumbLines || "No recent app context."}
+
+Fresh screen analysis:
+${screenContext}
+
+Recent events:
+${eventLines || "No recent events."}
+
+Conversation so far:
+${historyLines || "No previous voice messages in this session."}
+
+User just said:
+${input.transcription}
+
+Reply as Nerve.`;
 }

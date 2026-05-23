@@ -1,3 +1,4 @@
+import React from "react";
 import { Check, Clock, Pause, Play, RefreshCw } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
@@ -7,11 +8,13 @@ import { timeLeft, hasPastDeadline, isPast, completionStats, nextScheduledLabel 
 export function StepCard({
   snapshot,
   setSnapshot,
-  compact = false
+  compact = false,
+  voiceSlot
 }: {
   snapshot: AppSnapshot;
   setSnapshot: (snapshot: AppSnapshot) => void;
   compact?: boolean;
+  voiceSlot?: React.ReactNode;
 }) {
   const step = snapshot.activeStep;
   const latestObservation = snapshot.observations[0];
@@ -22,6 +25,9 @@ export function StepCard({
   const thinking = snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now();
   const delayActive = Boolean(snapshot.delayUntil && Date.parse(snapshot.delayUntil) > Date.now());
   const breakActive = snapshot.breakEndsAt && Date.parse(snapshot.breakEndsAt) > Date.now();
+  const voiceGuidance = step && snapshot.voiceGuidance && (!snapshot.voiceGuidance.stepId || snapshot.voiceGuidance.stepId === step.id)
+    ? snapshot.voiceGuidance
+    : null;
   const t = useCopy(snapshot.settings.language);
   const paused = snapshot.session?.status === "paused";
   const { completed, percent, total } = completionStats(snapshot.steps);
@@ -101,18 +107,21 @@ export function StepCard({
       </div>
       <div className="step-meta">
         <span>{completed}/{total} complete</span>
-        {step.reminderAt && <span className={isPast(step.reminderAt) ? "past-due-chip" : ""}>Remind {new Date(step.reminderAt).toLocaleString()}</span>}
         {step.dueAt && <span className={isPast(step.dueAt) ? "past-due-chip" : ""}>Due {new Date(step.dueAt).toLocaleString()}</span>}
         {step.routineIntervalMinutes && <span>{t("routineEvery")} {step.routineIntervalMinutes} min</span>}
         {step.routineNextAt && <span className={isPast(step.routineNextAt) ? "past-due-chip" : ""}>{t("routineNext")} {new Date(step.routineNextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         {step.delayCount > 0 && <span>{step.delayCount} delays</span>}
       </div>
-      <p className="action-text">{observation?.suggestedNextAction || step.nextAction}</p>
+      {voiceSlot}
+      <p className="action-text">{voiceGuidance?.suggestedNextAction || observation?.suggestedNextAction || step.nextAction}</p>
       <p className="muted">
-        {thinking
+        {voiceGuidance
+          ? voiceGuidance.response
+          : thinking
           ? t("thinkingHold")
           : observation?.conciseExplanation || step.explanation || t("nextPhysical")}
       </p>
+      {voiceGuidance && <p className="voice-guidance-note">Voice coach updated this from your last question.</p>}
       {observation?.suggestedStepComplete && (
         <div className="completion-prompt">
           <span>{t("completePrompt")}</span>
@@ -121,14 +130,14 @@ export function StepCard({
         </div>
       )}
       <div className={compact ? "button-grid" : "button-row"}>
-        <button className="primary" onClick={() => action("done")}>
-          <Check size={16} /> {t("done")}
-        </button>
         <button onClick={() => action("thinking")}>
           {thinking ? <Play size={16} /> : <Pause size={16} />} {thinking ? t("cancelThinking") : t("thinking")}
         </button>
         <button onClick={() => action("delay")}>
           <Clock size={16} /> {delayActive ? `Cancel (${timeLeft(snapshot.delayUntil)})` : t("delay")}
+        </button>
+        <button className="primary" style={compact ? { gridColumn: "1 / -1" } : undefined} onClick={() => action("done")}>
+          <Check size={16} /> {t("done")}
         </button>
         {step.routineIntervalMinutes && (
           <button onClick={() => action("repeatRoutine")} title={t("repeatRoutine")}>

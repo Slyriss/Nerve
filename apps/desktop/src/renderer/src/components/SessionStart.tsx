@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { AlertTriangle, Check, Clock, ListChecks, Plus, Trash2 } from "lucide-react";
+import { useEffect, useRef, useState } from "react";
+import { AlertTriangle, Check, Clock, LoaderCircle, ListChecks, Mic, Plus, Trash2 } from "lucide-react";
 import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type TaskType } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
@@ -23,9 +23,17 @@ export function SessionStart({
   const [parsedSteps, setParsedSteps] = useState<PlanStepDraft[]>([]);
   const [parseBusy, setParseBusy] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [dictationState, setDictationState] = useState<"idle" | "listening" | "transcribing">("idle");
   const [error, setError] = useState("");
+  const dictationStateRef = useRef(dictationState);
+  const goalRecorderRef = useRef<MediaRecorder | null>(null);
+  const goalStreamRef = useRef<MediaStream | null>(null);
+  const goalChunksRef = useRef<Blob[]>([]);
   const t = useCopy(settings.language);
   useNow(30_000);
+  useEffect(() => {
+    dictationStateRef.current = dictationState;
+  }, [dictationState]);
   const unresolvedPastDeadlineCount = parsedSteps.filter((step) => hasPastDeadline(step) && !step.pastDeadlineConfirmed).length;
   function patchParsedStep(index: number, patch: Partial<PlanStepDraft>) {
     setParsedSteps((steps) => steps.map((step, stepIndex) => (stepIndex === index ? { ...step, ...patch } : step)));
@@ -65,6 +73,89 @@ export function SessionStart({
       setBusy(false);
     }
   }
+  async function blobToBase64(blob: Blob) {
+    return new Promise<string>((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => {
+        const value = typeof reader.result === "string" ? reader.result : "";
+        resolve(value.includes(",") ? value.slice(value.indexOf(",") + 1) : value);
+      };
+      reader.onerror = () => reject(reader.error ?? new Error("Could not read voice recording."));
+      reader.readAsDataURL(blob);
+    });
+  }
+  function cleanupGoalStream() {
+    goalStreamRef.current?.getTracks().forEach((track) => track.stop());
+    goalStreamRef.current = null;
+    goalRecorderRef.current = null;
+    goalChunksRef.current = [];
+  }
+  async function transcribeGoalBlob(blob: Blob) {
+    if (blob.size === 0) {
+      setError("No audio captured.");
+      setDictationState("idle");
+      return;
+    }
+    setDictationState("transcribing");
+    try {
+      const result = await window.nerve.transcribeVoice(await blobToBase64(blob));
+      const text = result.transcription.trim();
+      if (text) {
+        setGoal((current) => [current.trim(), text].filter(Boolean).join(current.trim() ? "\n" : ""));
+        setParsedSteps([]);
+        setDetectedTaskTypes([]);
+      }
+    } catch (dictationError) {
+      setError(dictationError instanceof Error ? dictationError.message : "Voice input failed.");
+    } finally {
+      setDictationState("idle");
+    }
+  }
+  async function startGoalDictation() {
+    if (dictationStateRef.current !== "idle") return;
+    setError("");
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus") ? "audio/webm;codecs=opus" : "audio/webm";
+      const recorder = new MediaRecorder(stream, { mimeType });
+      goalStreamRef.current = stream;
+      goalRecorderRef.current = recorder;
+      goalChunksRef.current = [];
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) goalChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        const blob = new Blob(goalChunksRef.current, { type: mimeType });
+        cleanupGoalStream();
+        void transcribeGoalBlob(blob);
+      };
+      recorder.start();
+      setDictationState("listening");
+    } catch (dictationError) {
+      cleanupGoalStream();
+      setError(dictationError instanceof Error ? dictationError.message : "Voice input failed.");
+      setDictationState("idle");
+    }
+  }
+  function stopGoalDictation() {
+    const recorder = goalRecorderRef.current;
+    if (recorder && recorder.state !== "inactive") recorder.stop();
+  }
+  function toggleGoalDictation() {
+    if (dictationStateRef.current === "listening") {
+      stopGoalDictation();
+    } else if (dictationStateRef.current === "idle") {
+      void startGoalDictation();
+    }
+  }
+  useEffect(() => {
+    const cleanup = window.nerve.onToggleVoice(toggleGoalDictation);
+    return () => {
+      cleanup();
+      if (dictationStateRef.current === "listening") stopGoalDictation();
+      cleanupGoalStream();
+    };
+  }, []);
   return (
     <section className="start-layout">
       <div className="start-panel">
@@ -73,7 +164,7 @@ export function SessionStart({
           <h2>{t("ready")}</h2>
         </div>
         <div className="start-composer">
-          <label>
+          <label className="goal-field">
             {t("goal")}
             <textarea
               value={goal}
@@ -82,8 +173,18 @@ export function SessionStart({
                 setParsedSteps([]);
                 setDetectedTaskTypes([]);
               }}
-              placeholder="Finish math research, walk the dog at 3pm, shower at 5pm, dinner at 6pm..."
+              placeholder="Working on a presentation at 3pm, business report at 5pm..."
             />
+            <button
+              type="button"
+              className={`dictation-button ${dictationState}`}
+              disabled={busy || parseBusy || dictationState === "transcribing"}
+              title={dictationState === "listening" ? "Stop recording" : "Speak the initial goal"}
+              onClick={toggleGoalDictation}
+            >
+              {dictationState === "transcribing" ? <LoaderCircle size={14} /> : <Mic size={14} />}
+              {dictationState === "listening" ? "Press to stop" : dictationState === "transcribing" ? "Transcribing" : "Speak"}
+            </button>
           </label>
           <aside className="composer-rail">
             <div>

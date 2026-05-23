@@ -1,9 +1,12 @@
-import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, ActionItemStatus } from "@nerve/shared";
+import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, ActionItemStatus, VoiceCoachResponse, VoiceTranscriptionResponse } from "@nerve/shared";
 
 type NerveAction = "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak";
 
 interface NerveBridge {
   getSnapshot: () => Promise<AppSnapshot>;
+  voiceMessage: (audioBase64: string) => Promise<VoiceCoachResponse>;
+  setVoiceState: (state: "idle" | "listening" | "thinking" | "speaking" | "error") => Promise<void>;
+  transcribeVoice: (audioBase64: string) => Promise<VoiceTranscriptionResponse>;
   startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[]; lockInMode?: boolean }) => Promise<AppSnapshot>;
   parseTaskList: (input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }) => Promise<{ steps: PlanStepDraft[]; taskTypes: TaskType[] }>;
   updateStep: (stepId: string, patch: Partial<StepRecord>) => Promise<AppSnapshot>;
@@ -33,6 +36,7 @@ interface NerveBridge {
   startReminder: (reminderId: string) => Promise<AppSnapshot>;
   snoozeReminder: (reminderId: string, reminderAt: string) => Promise<AppSnapshot>;
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => () => void;
+  onToggleVoice: (callback: () => void) => () => void;
 }
 
 declare global {

@@ -56,7 +56,8 @@ export type CopyKey =
   | "quickNotes" | "notePlaceholder" | "noteReminder" | "addNote"
   | "reminderRequired" | "reminders" | "startNow" | "remindLater" | "setReminder"
   | "connectors" | "googleClientId" | "googleClientIdHint" | "googleClientSecret"
-  | "googleClientSecretHint" | "saveGoogleOAuth";
+  | "googleClientSecretHint" | "saveGoogleOAuth" | "elevenLabsApiKey"
+  | "elevenLabsVoiceId" | "elevenLabsVoiceHint" | "voiceCoach";
 
 export type Schedulable = { reminderAt?: string | null; dueAt?: string | null; routineNextAt?: string | null };
 

@@ -1,8 +1,12 @@
 import { contextBridge, ipcRenderer } from "electron";
-import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType } from "@nerve/shared";
+import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, VoiceCoachResponse, VoiceTranscriptionResponse } from "@nerve/shared";
 
 const nerve = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:getSnapshot"),
+  voiceMessage: (audioBase64: string): Promise<VoiceCoachResponse> => ipcRenderer.invoke("nerve:voiceMessage", audioBase64),
+  setVoiceState: (state: "idle" | "listening" | "thinking" | "speaking" | "error"): Promise<void> =>
+    ipcRenderer.invoke("nerve:setVoiceState", state),
+  transcribeVoice: (audioBase64: string): Promise<VoiceTranscriptionResponse> => ipcRenderer.invoke("nerve:transcribeVoice", audioBase64),
   startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[]; lockInMode?: boolean }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:startSession", input),
   parseTaskList: (input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }): Promise<{ steps: PlanStepDraft[]; taskTypes: TaskType[] }> =>
@@ -47,6 +51,13 @@ const nerve = {
     ipcRenderer.on("nerve:snapshot", listener);
     return () => {
       ipcRenderer.removeListener("nerve:snapshot", listener);
+    };
+  },
+  onToggleVoice: (callback: () => void) => {
+    const listener = () => callback();
+    ipcRenderer.on("nerve:toggleVoice", listener);
+    return () => {
+      ipcRenderer.removeListener("nerve:toggleVoice", listener);
     };
   }
 };

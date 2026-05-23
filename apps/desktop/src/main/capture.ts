@@ -40,7 +40,7 @@ export interface ScreenCapture {
   /** System idle time in seconds at the moment of capture */
   idleSeconds: number;
   /** What triggered this frame */
-  trigger: "window-change" | "idle" | "interval";
+  trigger: "window-change" | "idle" | "interval" | "voice";
   /**
    * True when the active window is Nerve itself or another noisy source.
    * The orchestrator should fall back to the last known good context.

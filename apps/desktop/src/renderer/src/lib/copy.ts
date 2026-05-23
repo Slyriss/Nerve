@@ -36,7 +36,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     done: "Done",
     thinking: "I'm thinking",
     cancelThinking: "Cancel thinking pause",
-    delay: "Give me 5 more minutes",
+    delay: "5 more minutes",
     thinkingHold: "Got it. I'll hold this step while you think.",
     routine: "Routine",
     repeatRoutine: "Repeat routine task",
@@ -129,7 +129,11 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     googleClientIdHint: "Create a Desktop app OAuth client at console.cloud.google.com",
     googleClientSecret: "Google Client Secret",
     googleClientSecretHint: "Required for some Google OAuth client types; leave blank if your client does not have one.",
-    saveGoogleOAuth: "Save Google OAuth"
+    saveGoogleOAuth: "Save Google OAuth",
+    elevenLabsApiKey: "ElevenLabs API key",
+    elevenLabsVoiceId: "ElevenLabs voice ID",
+    elevenLabsVoiceHint: "Pick a voice from the ElevenLabs voice library.",
+    voiceCoach: "Voice coach"
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -259,7 +263,11 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     googleClientIdHint: "在 console.cloud.google.com 创建桌面应用 OAuth 客户端",
     googleClientSecret: "Google 客户端密钥",
     googleClientSecretHint: "某些 Google OAuth 客户端类型需要；如果你的客户端没有密钥可留空。",
-    saveGoogleOAuth: "保存 Google OAuth"
+    saveGoogleOAuth: "保存 Google OAuth",
+    elevenLabsApiKey: "ElevenLabs API 密钥",
+    elevenLabsVoiceId: "ElevenLabs 声音 ID",
+    elevenLabsVoiceHint: "从 ElevenLabs 声音库选择一个声音。",
+    voiceCoach: "语音教练"
   }
 };
 

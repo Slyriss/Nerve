@@ -93,6 +93,35 @@ export function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapsho
         </section>
         <section className="settings-section">
           <div className="settings-section-head">
+            <KeyRound size={17} />
+            <h3>{t("voiceCoach")}</h3>
+          </div>
+          <div className="settings-grid">
+            <label className="wide-field">
+              {t("elevenLabsApiKey")}
+              <input
+                type="password"
+                value={settings.elevenLabsApiKey}
+                onChange={(event) => setSettings({ ...settings, elevenLabsApiKey: event.target.value })}
+                onBlur={() => save({ elevenLabsApiKey: settings.elevenLabsApiKey })}
+              />
+            </label>
+            <label className="wide-field">
+              {t("elevenLabsVoiceId")}
+              <input
+                type="text"
+                value={settings.elevenLabsVoiceId}
+                onChange={(event) => setSettings({ ...settings, elevenLabsVoiceId: event.target.value })}
+                onBlur={() => save({ elevenLabsVoiceId: settings.elevenLabsVoiceId })}
+              />
+              <span className="subtle" style={{ fontSize: "0.75rem", marginTop: 4, display: "block" }}>
+                <a href="https://elevenlabs.io/app/voice-library" target="_blank" rel="noreferrer">{t("elevenLabsVoiceHint")}</a>
+              </span>
+            </label>
+          </div>
+        </section>
+        <section className="settings-section">
+          <div className="settings-section-head">
             <Monitor size={17} />
             <h3>{t("connectors")}</h3>
           </div>

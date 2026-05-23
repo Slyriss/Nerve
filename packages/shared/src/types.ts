@@ -350,6 +350,8 @@ export interface NerveSettings {
   aiProvider: AIProviderName;
   deepseekApiKey: string;
   deepseekModel: string;
+  elevenLabsApiKey: string;
+  elevenLabsVoiceId: string;
   screenshotIntervalSeconds: 10 | 30 | 60;
   stuckThresholdMinutes: 5 | 8 | 10;
   driftThresholdMinutes: 3 | 6 | 10;
@@ -394,12 +396,16 @@ export interface AppSnapshot {
   connectors: ConnectorStatus[];
   inboxItems: ActionItem[];
   hasGoogleClientSecret: boolean;
+  voiceGuidance: VoiceGuidance | null;
+  voiceState: VoiceRuntimeState;
 }
 
 export const defaultSettings: NerveSettings = {
   aiProvider: "deepseek",
   deepseekApiKey: "",
   deepseekModel: "deepseek-chat",
+  elevenLabsApiKey: "",
+  elevenLabsVoiceId: "21m00Tcm4TlvDq8ikWAM",
   screenshotIntervalSeconds: 10,
   stuckThresholdMinutes: 8,
   driftThresholdMinutes: 6,
@@ -418,3 +424,44 @@ export const defaultSettings: NerveSettings = {
   breakDurationMinutes: 5,
   defaultLockInMode: false
 };
+
+export interface VoiceCoachMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
+export interface VoiceCoachPromptInput {
+  transcription: string;
+  sessionGoal: string;
+  sessionStatus: SessionStatus;
+  taskTypes: TaskType[];
+  currentStep: StepRecord | null;
+  steps: StepRecord[];
+  recentEvents: EventRecord[];
+  recentBreadcrumbs: BreadcrumbRecord[];
+  latestObservation?: AIObservationRecord | null;
+  voiceHistory: VoiceCoachMessage[];
+  language?: DisplayLanguage;
+}
+
+export interface VoiceCoachResponse {
+  transcription: string;
+  response: string;
+  audioBase64: string;
+}
+
+export interface VoiceTranscriptionResponse {
+  transcription: string;
+}
+
+export interface VoiceGuidance {
+  transcription: string;
+  response: string;
+  suggestedNextAction?: string | null;
+  stepId?: string | null;
+  activeApp?: string | null;
+  windowTitle?: string | null;
+  createdAt: string;
+}
+
+export type VoiceRuntimeState = "idle" | "listening" | "thinking" | "speaking" | "error";

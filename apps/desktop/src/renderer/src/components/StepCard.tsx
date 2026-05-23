@@ -72,8 +72,8 @@ export function StepCard({
             <h2>{t("waitingRoutineTitle")}</h2>
           </div>
         </div>
-        <p className="muted">{t("waitingRoutineBody")}</p>
         <CatMascot mood="sleep" size={compact ? "small" : "medium"} />
+        <p className="muted">{t("waitingRoutineBody")}</p>
         {snapshot.steps.some((candidate) => candidate.routineNextAt) && (
           <div className="step-meta">
             <span>{t("routineNext")} {nextScheduledLabel(snapshot.steps)}</span>
@@ -109,18 +109,17 @@ export function StepCard({
         </div>
         <span className="task-badge">{step.taskType}</span>
       </div>
-      <div className="progress-line" aria-label={`${percent}% complete`}>
-        <span style={{ width: `${percent}%` }} />
-      </div>
       <CatMascot
         mood={catMood}
         size={compact ? "small" : "medium"}
         message={snapshot.lockInWarningStartedAt ? t("lockInWarningTitle") : undefined}
         warningLevel={warningLevel}
       />
+      <div className="progress-line" aria-label={`${percent}% complete`}>
+        <span style={{ width: `${percent}%` }} />
+      </div>
       <div className="step-meta">
         <span>{completed}/{total} complete</span>
-        {step.dueAt && <span className={isPast(step.dueAt) ? "past-due-chip" : ""}>Due {new Date(step.dueAt).toLocaleString()}</span>}
         {step.routineIntervalMinutes && <span>{t("routineEvery")} {step.routineIntervalMinutes} min</span>}
         {step.routineNextAt && <span className={isPast(step.routineNextAt) ? "past-due-chip" : ""}>{t("routineNext")} {new Date(step.routineNextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         {step.delayCount > 0 && <span>{step.delayCount} delays</span>}
@@ -143,14 +142,14 @@ export function StepCard({
         </div>
       )}
       <div className={compact ? "button-grid" : "button-row"}>
+        <button className="primary" style={compact ? { gridColumn: "1 / -1" } : undefined} onClick={() => action("done")}>
+          <Check size={16} /> {t("done")}
+        </button>
         <button onClick={() => action("thinking")}>
           {thinking ? <Play size={16} /> : <Pause size={16} />} {thinking ? t("cancelThinking") : t("thinking")}
         </button>
         <button onClick={() => action("delay")}>
           <Clock size={16} /> {delayActive ? `Cancel (${timeLeft(snapshot.delayUntil)})` : t("delay")}
-        </button>
-        <button className="primary" style={compact ? { gridColumn: "1 / -1" } : undefined} onClick={() => action("done")}>
-          <Check size={16} /> {t("done")}
         </button>
         {step.routineIntervalMinutes && (
           <button onClick={() => action("repeatRoutine")} title={t("repeatRoutine")}>

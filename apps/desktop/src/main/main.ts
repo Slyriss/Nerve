@@ -49,6 +49,8 @@ const isSelfTest = process.env.NERVE_SMOKE_TEST === "1" || process.env.NERVE_BRE
 
 if (isSelfTest) {
   app.setPath("userData", path.join(app.getPath("temp"), `NerveSelfTest-${process.pid}`));
+} else {
+  app.setPath("userData", path.join(app.getPath("appData"), "Nerve"));
 }
 
 protocol.registerSchemesAsPrivileged([
@@ -100,8 +102,6 @@ const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 const MAX_REMINDER_WAKE_MS = 60_000;
 const LOCK_IN_BLOCKER_DELAY_MS = 20_000;
 const APP_DISPLAY_NAME = "别meow鱼";
-
-app.setName(APP_DISPLAY_NAME);
 
 const settingOptions = {
   aiProvider: ["deepseek"],
@@ -1832,8 +1832,8 @@ function normalizeBannedRule(rule: string) {
   return rule.trim().toLowerCase().replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, "");
 }
 
-function bannedSiteMatch(settings: NerveSettings, context: { activeApp: string; windowTitle: string; matchText?: string }): string | null {
-  if (!settings.bannedSitesEnabled) return null;
+function bannedSiteMatch(settings: NerveSettings, context: { activeApp: string; windowTitle: string; matchText?: string; force?: boolean }): string | null {
+  if (!settings.bannedSitesEnabled && !context.force) return null;
   const haystack = `${context.activeApp} ${context.windowTitle} ${context.matchText ?? ""}`.toLowerCase();
   for (const rawRule of settings.bannedSites) {
     const rule = normalizeBannedRule(rawRule);
@@ -1853,7 +1853,7 @@ function bannedSiteMatch(settings: NerveSettings, context: { activeApp: string; 
   return null;
 }
 
-function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, context: { activeApp: string; windowTitle: string; matchText?: string }) {
+function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, context: { activeApp: string; windowTitle: string; matchText?: string; force?: boolean }) {
   const rule = bannedSiteMatch(settings, context);
   if (!rule) {
     bannedSiteAlert = null;
@@ -2042,7 +2042,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       addEvent(session.id, "screenshot_captured", "Screenshot captured and stored locally.", { screenshotId });
     }
 
-    if (handleBannedSiteDetection(session.id, settings, { activeApp, windowTitle, matchText })) {
+    if (handleBannedSiteDetection(session.id, settings, { activeApp, windowTitle, matchText, force: session.lockInMode })) {
       broadcast();
       return;
     }
@@ -2103,6 +2103,20 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       observation.conciseExplanation,
       { stepId: activeStep.id, activeApp, windowTitle }
     );
+    if (handleBannedSiteDetection(session.id, settings, {
+      activeApp,
+      windowTitle,
+      force: session.lockInMode,
+      matchText: [
+        matchText,
+        observation.activeContext,
+        observation.visibleChangeSummary,
+        observation.conciseExplanation
+      ].filter(Boolean).join(" ")
+    })) {
+      broadcast();
+      return;
+    }
 
     const stuckReached = observation.userState === "stuck" && elapsedOnStep >= settings.stuckThresholdMinutes * 60 && !thinkingActive;
     const driftReached = observation.userState === "unproductive_drift" && elapsedInApp >= settings.driftThresholdMinutes * 60 && !thinkingActive;
@@ -2113,7 +2127,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       }
     }
 
-    if (session.lockInMode && !thinkingActive) {
+    if (!bannedSiteAlert && session.lockInMode && !thinkingActive) {
       if (observation.userState === "unproductive_drift" || observation.userState === "stuck") {
         startLockInWarning(session);
       } else if (observation.userState === "on_task" || observation.userState === "progress" || observation.userState === "productive_drift") {

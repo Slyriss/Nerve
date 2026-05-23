@@ -34,7 +34,7 @@ import {
   type ConnectorStatus
 } from "@nerve/shared";
 import { schema, settingsTable } from "./db/schema.js";
-import { startGmailOAuth, refreshGmailToken, fetchGmailMessages, encryptToken, decryptToken, type GmailTokens, type RawGmailMessage } from "./connectors/gmail.js";
+import { DEFAULT_GOOGLE_CLIENT_ID, startGmailOAuth, refreshGmailToken, fetchGmailMessages, encryptToken, decryptToken, type RawGmailMessage } from "./connectors/gmail.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const isDev = Boolean(process.env.VITE_DEV_SERVER_URL);
@@ -427,6 +427,32 @@ function applyUserRequestedDefaults() {
       })
       .run();
   }
+  const googleClientId = process.env.NERVE_GOOGLE_CLIENT_ID || process.env.GOOGLE_CLIENT_ID || DEFAULT_GOOGLE_CLIENT_ID;
+  const existingGoogleClientId = db.prepare("SELECT value FROM settings WHERE key = 'googleClientId'").get() as { value?: string } | undefined;
+  const parsedGoogleClientId = existingGoogleClientId?.value ? JSON.parse(existingGoogleClientId.value) : "";
+  if (typeof parsedGoogleClientId !== "string" || !parsedGoogleClientId.trim()) {
+    orm.insert(settingsTable)
+      .values({ key: "googleClientId", value: JSON.stringify(googleClientId), updatedAt: timestamp })
+      .onConflictDoUpdate({
+        target: settingsTable.key,
+        set: { value: JSON.stringify(googleClientId), updatedAt: timestamp }
+      })
+      .run();
+  }
+  const googleClientSecret = process.env.NERVE_GOOGLE_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET || "";
+  if (googleClientSecret) {
+    const existingGoogleClientSecret = db.prepare("SELECT value FROM settings WHERE key = 'googleClientSecret'").get() as { value?: string } | undefined;
+    const parsedGoogleClientSecret = existingGoogleClientSecret?.value ? JSON.parse(existingGoogleClientSecret.value) : "";
+    if (typeof parsedGoogleClientSecret !== "string" || !parsedGoogleClientSecret.trim()) {
+      orm.insert(settingsTable)
+        .values({ key: "googleClientSecret", value: JSON.stringify(encryptApiKey(googleClientSecret)), updatedAt: timestamp })
+        .onConflictDoUpdate({
+          target: settingsTable.key,
+          set: { value: JSON.stringify(encryptApiKey(googleClientSecret)), updatedAt: timestamp }
+        })
+        .run();
+    }
+  }
   cachedSettings = null;
 }
 
@@ -562,6 +588,10 @@ function rowScreenshot(row: any): ScreenshotRecord {
   };
 }
 
+function screenshotFilesExist(row: { file_path: string; thumbnail_path: string }) {
+  return fs.existsSync(row.file_path) && fs.existsSync(row.thumbnail_path);
+}
+
 function rowObservation(row: any): AIObservationRecord {
   return {
     id: row.id,
@@ -650,6 +680,7 @@ function getSettings(): NerveSettings {
   for (const row of rows) settings[row.key] = JSON.parse(row.value);
   const result = settings as unknown as NerveSettings;
   result.deepseekApiKey = decryptApiKey(result.deepseekApiKey ?? "");
+  result.googleClientSecret = decryptApiKey(result.googleClientSecret ?? "");
   cachedSettings = result;
   return cachedSettings;
 }
@@ -676,8 +707,8 @@ function getConnectorStatuses(): ConnectorStatus[] {
   }];
 }
 
-function getPendingInboxItems(): ActionItem[] {
-  const rows = db.prepare("SELECT * FROM inbox_items WHERE status = 'pending' ORDER BY extracted_at DESC LIMIT 50").all() as any[];
+function getVisibleInboxItems(): ActionItem[] {
+  const rows = db.prepare("SELECT * FROM inbox_items WHERE status IN ('pending', 'promoted') ORDER BY extracted_at DESC LIMIT 50").all() as any[];
   return rows.map(r => ({
     id: r.id,
     title: r.title,
@@ -701,7 +732,7 @@ async function getValidGmailAccessToken(): Promise<string | null> {
   if (row.expiresAt && new Date(row.expiresAt).getTime() - Date.now() < 5 * 60 * 1000) {
     if (!row.refreshToken) return null;
     try {
-      const { accessToken, expiresAt } = await refreshGmailToken(settings.googleClientId, row.refreshToken);
+      const { accessToken, expiresAt } = await refreshGmailToken(settings.googleClientId, row.refreshToken, settings.googleClientSecret);
       const encryptedAccess = encryptToken(accessToken);
       db.prepare("UPDATE connector_tokens SET access_token = ?, expires_at = ?, updated_at = ? WHERE connector = 'gmail'")
         .run(encryptedAccess, expiresAt, now());
@@ -717,7 +748,7 @@ async function extractActionItemsFromMessages(messages: RawGmailMessage[]): Prom
   if (!messages.length) return [];
   const settings = getSettings();
   const messagesSummary = messages.map((m, i) =>
-    `[${i + 1}] From: ${m.sender}\nSubject: ${m.subject}\nReceived: ${m.receivedAt}\nBody excerpt: ${m.body.slice(0, 500)}`
+    `[${i + 1}] Gmail ID: ${m.id}\nFrom: ${m.sender}\nSubject: ${m.subject}\nReceived: ${m.receivedAt}\nBody excerpt: ${m.body.slice(0, 500)}`
   ).join("\n\n---\n\n");
 
   const prompt = `You are an ADHD assistant. Extract concrete action items from these emails.
@@ -725,7 +756,7 @@ For each action item, return a JSON object with:
 - title: short action phrase (5-10 words)
 - description: 1-2 sentence context
 - source: "gmail"
-- sourceMessageId: the message index as string (e.g. "1", "2")
+- sourceMessageId: the exact Gmail ID shown for the email
 - urgency: "low" | "medium" | "high"
 - suggestedTaskType: one of: "Essay writing", "General writing", "Coding", "Research", "Study", "Email or admin", "Presentation", "Personal / life", "Health / self-care", "Household / chores", "Errands", "Meals", "Pet care", "Exercise", "Social / communication", "Finance / bills", "Design or creative", "Planning", "Mixed work"
 - dueHint: optional deadline hint extracted from email (e.g. "by Friday", null if none)
@@ -758,21 +789,29 @@ Return ONLY valid JSON array.`;
     if (!match) return [];
     const items = JSON.parse(match[0]) as any[];
     const nowStr = now();
+    const messageIds = new Set(messages.map((message) => message.id));
+    const indexToMessageId = new Map(messages.map((message, index) => [String(index + 1), message.id]));
     return items.map((item: any) => ({
       id: id(),
       title: String(item.title ?? "").slice(0, 200),
       description: String(item.description ?? "").slice(0, 500),
       source: "gmail" as const,
-      sourceMessageId: String(item.sourceMessageId ?? ""),
+      sourceMessageId: resolveSourceMessageId(item.sourceMessageId, messageIds, indexToMessageId),
       urgency: (["low", "medium", "high"].includes(item.urgency) ? item.urgency : "low") as "low" | "medium" | "high",
       suggestedTaskType: canonicalTaskType(item.suggestedTaskType, "Email or admin"),
       dueHint: item.dueHint ? String(item.dueHint).slice(0, 100) : undefined,
       extractedAt: nowStr,
       status: "pending" as const
-    }));
+    })).filter((item) => item.title && item.sourceMessageId);
   } catch {
     return [];
   }
+}
+
+function resolveSourceMessageId(value: unknown, messageIds: Set<string>, indexToMessageId: Map<string, string>): string {
+  const raw = String(value ?? "").trim();
+  if (messageIds.has(raw)) return raw;
+  return indexToMessageId.get(raw) ?? "";
 }
 
 function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
@@ -850,6 +889,9 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (typeof patch.googleClientId === "string") {
     normalized.googleClientId = patch.googleClientId.trim();
+  }
+  if (typeof patch.googleClientSecret === "string") {
+    normalized.googleClientSecret = encryptApiKey(patch.googleClientSecret.trim());
   }
   return normalized;
 }
@@ -1091,6 +1133,71 @@ function syncStepReminder(step: StepRecord) {
     reminderAt,
     now()
   );
+}
+
+function addPlanStepFromSuggestion(input: {
+  sessionId: string;
+  title: string;
+  nextAction: string;
+  explanation: string;
+  taskType: TaskType;
+  deadlineText?: string;
+  dueAt?: string | null;
+  reminderAt: string;
+  eventType: string;
+  eventMessage: string;
+}) {
+  const reminderAt = validIso(input.reminderAt);
+  if (!reminderAt) throw new Error("Choose a reminder time before adding this to the plan.");
+  const session = getSessionById(input.sessionId);
+  if (!session || !["active", "paused"].includes(session.status)) {
+    throw new Error("No active plan right now. Make a plan from the main page first, then add this.");
+  }
+  const title = input.title.trim().slice(0, 180);
+  const nextAction = input.nextAction.trim().slice(0, 500);
+  if (!title || !nextAction) throw new Error("A title and next action are required.");
+  const nextIndexRow = db.prepare("SELECT COALESCE(MAX(order_index), -1) + 1 idx FROM activities WHERE session_id = ?").get(input.sessionId) as { idx: number };
+  const timestamp = now();
+  const activityId = id();
+  db.prepare("INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL)").run(
+    activityId,
+    input.sessionId,
+    Number(nextIndexRow.idx),
+    title,
+    input.taskType,
+    input.deadlineText ?? "",
+    validIso(input.dueAt),
+    reminderAt,
+    timestamp,
+    timestamp
+  );
+  db.prepare("INSERT INTO guidance_steps (id, activity_id, session_id, order_index, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, 0, ?, ?, 'pending', 0, 0, ?, ?, NULL)").run(
+    id(),
+    activityId,
+    input.sessionId,
+    nextAction,
+    input.explanation.trim().slice(0, 500) || "Return to this note when the reminder fires.",
+    timestamp,
+    timestamp
+  );
+  const step = getSteps(input.sessionId).find((candidate) => candidate.id === activityId);
+  if (step) syncStepReminder(step);
+  addEvent(input.sessionId, input.eventType, input.eventMessage, { stepId: activityId, reminderAt });
+  return activityId;
+}
+
+function activateReminderStep(reminder: ReminderRecord) {
+  if (!reminder.stepId) return;
+  const step = db.prepare("SELECT * FROM activities WHERE id = ?").get(reminder.stepId) as any;
+  if (!step || step.status === "complete") return;
+  const timestamp = now();
+  db.prepare("UPDATE activities SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active'").run(timestamp, reminder.sessionId);
+  db.prepare("UPDATE guidance_steps SET status = 'pending', updated_at = ? WHERE session_id = ? AND status = 'active'").run(timestamp, reminder.sessionId);
+  db.prepare("UPDATE activities SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, reminder.stepId);
+  const guidance = getActiveGuidanceStep(reminder.stepId) ?? db.prepare("SELECT * FROM guidance_steps WHERE activity_id = ? ORDER BY order_index LIMIT 1").get(reminder.stepId) as any;
+  if (guidance) db.prepare("UPDATE guidance_steps SET status = 'active', updated_at = ? WHERE id = ?").run(timestamp, guidance.id);
+  db.prepare("UPDATE sessions SET status = 'active', ended_at = NULL, updated_at = ? WHERE id = ?").run(timestamp, reminder.sessionId);
+  activeSessionId = reminder.sessionId;
 }
 
 function checkReminders() {
@@ -1412,14 +1519,41 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
 
 function pruneOldScreenshots(keepDays = 30) {
   const cutoff = new Date(Date.now() - keepDays * 24 * 60 * 60 * 1000).toISOString();
-  const old = db.prepare("SELECT file_path, thumbnail_path FROM screenshots WHERE created_at < ?").all(cutoff) as Array<{ file_path: string; thumbnail_path: string }>;
-  for (const row of old) {
-    try { fs.rmSync(row.file_path, { force: true }); } catch { /* file already gone */ }
-    try { fs.rmSync(row.thumbnail_path, { force: true }); } catch { /* file already gone */ }
+  const old = db.prepare("SELECT id, file_path, thumbnail_path FROM screenshots WHERE created_at < ?").all(cutoff) as Array<{ id: string; file_path: string; thumbnail_path: string }>;
+  deleteScreenshotRecords(old);
+}
+
+function pruneMissingScreenshotFiles() {
+  const rows = db.prepare("SELECT id, file_path, thumbnail_path FROM screenshots").all() as Array<{ id: string; file_path: string; thumbnail_path: string }>;
+  deleteScreenshotRecords(rows.filter((row) => !screenshotFilesExist(row)));
+}
+
+function deleteScreenshotRecords(rows: Array<{ id: string; file_path: string; thumbnail_path: string }>) {
+  if (rows.length === 0) return;
+  const deleteScreenshot = db.prepare("DELETE FROM screenshots WHERE id = ?");
+  const detachObservation = db.prepare("UPDATE ai_observations SET screenshot_id = NULL WHERE screenshot_id = ?");
+  const tx = db.transaction((staleRows: Array<{ id: string; file_path: string; thumbnail_path: string }>) => {
+    for (const row of staleRows) {
+      try { fs.rmSync(row.file_path, { force: true }); } catch { /* file already gone */ }
+      try { fs.rmSync(row.thumbnail_path, { force: true }); } catch { /* file already gone */ }
+      detachObservation.run(row.id);
+      deleteScreenshot.run(row.id);
+    }
+  });
+  tx(rows);
+}
+
+function getSessionScreenshots(sessionId: string): ScreenshotRecord[] {
+  const rows = db.prepare(`SELECT s.*, o.user_state ai_state, st.title step_title
+    FROM screenshots s
+    LEFT JOIN ai_observations o ON o.screenshot_id = s.id
+    LEFT JOIN activities st ON st.session_id = s.session_id AND st.status = 'active'
+    WHERE s.session_id = ? ORDER BY s.captured_at DESC LIMIT 80`).all(sessionId) as any[];
+  const missing = rows.filter((row) => !screenshotFilesExist(row));
+  if (missing.length) {
+    deleteScreenshotRecords(missing);
   }
-  if (old.length > 0) {
-    db.prepare("DELETE FROM screenshots WHERE created_at < ?").run(cutoff);
-  }
+  return rows.filter((row) => screenshotFilesExist(row)).map(rowScreenshot);
 }
 
 function resetCaptureLoop() {
@@ -1486,13 +1620,7 @@ function snapshot(): AppSnapshot {
     activities: sessionId ? getActivities(sessionId) : [],
     guidanceSteps: sessionId ? getGuidanceSteps(sessionId) : [],
     activeStep: sessionId ? getActiveStep(sessionId) : null,
-    screenshots: sessionId
-      ? (db.prepare(`SELECT s.*, o.user_state ai_state, st.title step_title
-          FROM screenshots s
-          LEFT JOIN ai_observations o ON o.screenshot_id = s.id
-          LEFT JOIN activities st ON st.session_id = s.session_id AND st.status = 'active'
-          WHERE s.session_id = ? ORDER BY s.captured_at DESC LIMIT 80`).all(sessionId) as any[]).map(rowScreenshot)
-      : [],
+    screenshots: sessionId ? getSessionScreenshots(sessionId) : [],
     events: sessionId ? (db.prepare("SELECT * FROM events WHERE session_id = ? ORDER BY created_at DESC LIMIT 120").all(sessionId) as any[]).map(rowEvent) : [],
     breadcrumbs: sessionId ? (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at DESC LIMIT 40").all(sessionId) as any[]).map(rowBreadcrumb) : [],
     observations: sessionId ? (db.prepare("SELECT * FROM ai_observations WHERE session_id = ? ORDER BY created_at DESC LIMIT 50").all(sessionId) as any[]).map(rowObservation) : [],
@@ -1506,7 +1634,7 @@ function snapshot(): AppSnapshot {
     bannedSiteStrikeCount,
     screenshotFolder: screenshotDir(),
     connectors: getConnectorStatuses(),
-    inboxItems: getPendingInboxItems()
+    inboxItems: getVisibleInboxItems()
   };
 }
 
@@ -1719,10 +1847,14 @@ function registerIpc() {
   ipcMain.handle("nerve:connectGmail", async (): Promise<AppSnapshot> => {
     const settings = getSettings();
     if (!settings.googleClientId) throw new Error("Google Client ID not configured in Settings");
+    if (settings.googleClientId === DEFAULT_GOOGLE_CLIENT_ID && !settings.googleClientSecret) {
+      throw new Error("This Google OAuth client requires a Google Client Secret. Add it in Settings, save Google OAuth, then try Connect Gmail again.");
+    }
     try {
-      const tokens = await startGmailOAuth(settings.googleClientId);
+      const tokens = await startGmailOAuth(settings.googleClientId, settings.googleClientSecret);
       const encAccess = encryptToken(tokens.accessToken);
-      const encRefresh = encryptToken(tokens.refreshToken);
+      const existing = getConnectorTokenRow("gmail");
+      const encRefresh = tokens.refreshToken ? encryptToken(tokens.refreshToken) : existing?.refreshToken;
       const nowStr = now();
       db.prepare(`
         INSERT INTO connector_tokens (connector, access_token, refresh_token, email, expires_at, created_at, updated_at)
@@ -1733,11 +1865,15 @@ function registerIpc() {
           email = excluded.email,
           expires_at = excluded.expires_at,
           updated_at = excluded.updated_at
-      `).run(encAccess, encRefresh, tokens.email, tokens.expiresAt, nowStr, nowStr);
+      `).run(encAccess, encRefresh ?? null, tokens.email, tokens.expiresAt, nowStr, nowStr);
       broadcast();
       return snapshot();
     } catch (err) {
-      throw new Error(`Gmail connection failed: ${err instanceof Error ? err.message : String(err)}`);
+      const message = err instanceof Error ? err.message : String(err);
+      if (/client_secret is missing/i.test(message)) {
+        throw new Error("Gmail connection failed: Google says this OAuth client requires a Client Secret. Add the Google Client Secret in Settings, save Google OAuth, then connect again.");
+      }
+      throw new Error(`Gmail connection failed: ${message}`);
     }
   });
 
@@ -1772,7 +1908,83 @@ function registerIpc() {
   });
 
   ipcMain.handle("nerve:updateInboxItem", async (_event, itemId: string, status: ActionItemStatus): Promise<AppSnapshot> => {
+    if (status === "promoted" && !getCurrentSession()) {
+      throw new Error("No active plan right now. Make a plan from the main page first, then come back to add inbox items to the session.");
+    }
     db.prepare("UPDATE inbox_items SET status = ? WHERE id = ?").run(status, itemId);
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:addNoteToPlan", async (_event, input: { note: string; reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> => {
+    const session = getCurrentSession();
+    if (!session || !["active", "paused"].includes(session.status)) {
+      throw new Error("No active plan right now. Make a plan from the main page first, then add this.");
+    }
+    const note = typeof input.note === "string" ? input.note.trim() : "";
+    if (!note) throw new Error("Write a note before adding it to the plan.");
+    const firstLine = note.split(/\r?\n/).find((line) => line.trim())?.trim() ?? note;
+    addPlanStepFromSuggestion({
+      sessionId: session.id,
+      title: firstLine,
+      nextAction: `Review note: ${firstLine}`,
+      explanation: note,
+      taskType: session.taskTypes[0] ?? session.taskType,
+      reminderAt: input.reminderAt,
+      dueAt: input.dueAt,
+      eventType: "note_added_to_plan",
+      eventMessage: "A note was added to the plan."
+    });
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:promoteInboxItem", async (_event, itemId: string, input: { reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> => {
+    const session = getCurrentSession();
+    if (!session || !["active", "paused"].includes(session.status)) {
+      throw new Error("No active plan right now. Make a plan from the main page first, then come back to add inbox items to the session.");
+    }
+    const row = db.prepare("SELECT * FROM inbox_items WHERE id = ?").get(itemId) as any;
+    if (!row) throw new Error("Inbox item not found.");
+    addPlanStepFromSuggestion({
+      sessionId: session.id,
+      title: row.title,
+      nextAction: row.description || `Handle inbox item: ${row.title}`,
+      explanation: row.description || "Open Gmail and handle this inbox item.",
+      taskType: canonicalTaskType(row.suggested_task_type, "Email or admin"),
+      deadlineText: row.due_hint ?? "",
+      reminderAt: input.reminderAt,
+      dueAt: input.dueAt,
+      eventType: "inbox_item_added_to_plan",
+      eventMessage: "An inbox item was added to the plan."
+    });
+    db.prepare("UPDATE inbox_items SET status = 'promoted' WHERE id = ?").run(itemId);
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:startReminder", async (_event, reminderId: string): Promise<AppSnapshot> => {
+    const row = db.prepare("SELECT * FROM reminders WHERE id = ?").get(reminderId) as any;
+    if (!row) return snapshot();
+    const reminder = rowReminder(row);
+    activateReminderStep(reminder);
+    db.prepare("UPDATE reminders SET status = 'dismissed' WHERE id = ?").run(reminderId);
+    addEvent(reminder.sessionId, "reminder_started", "Reminder started now.", { reminderId, stepId: reminder.stepId });
+    overlayExpanded = true;
+    resetCaptureLoop();
+    resetReminderLoop();
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:snoozeReminder", async (_event, reminderId: string, reminderAt: string): Promise<AppSnapshot> => {
+    const nextAt = validIso(reminderAt);
+    if (!nextAt) throw new Error("Choose a valid reminder time.");
+    const row = db.prepare("SELECT * FROM reminders WHERE id = ?").get(reminderId) as any;
+    if (!row) return snapshot();
+    db.prepare("UPDATE reminders SET status = 'scheduled', reminder_at = ?, triggered_at = NULL WHERE id = ?").run(nextAt, reminderId);
+    addEvent(row.session_id, "reminder_snoozed", "Reminder rescheduled.", { reminderId, reminderAt: nextAt });
+    resetReminderLoop();
     broadcast();
     return snapshot();
   });
@@ -2567,6 +2779,7 @@ app.whenReady().then(() => {
   createMainWindow();
   activeSessionId = getResumableSession()?.id ?? null;
   pruneOldScreenshots();
+  pruneMissingScreenshotFiles();
   resetCaptureLoop();
   resetReminderLoop();
   registerGlobalHotkeys();

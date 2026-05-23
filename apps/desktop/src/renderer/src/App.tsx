@@ -56,7 +56,7 @@ interface ConnectorStatus {
   error?: string | null;
 }
 
-type View = "start" | "plan" | "log" | "history" | "settings" | "inbox";
+type View = "start" | "plan" | "calendar" | "log" | "history" | "settings" | "inbox";
 type CopyKey =
   | "privateCopilot"
   | "session"
@@ -83,7 +83,6 @@ type CopyKey =
   | "done"
   | "thinking"
   | "delay"
-  | "smaller"
   | "thinkingHold"
   | "nextPhysical"
   | "completePrompt"
@@ -113,6 +112,7 @@ type CopyKey =
   | "openScreenshotFolder"
   | "deleteData"
   | "viewPlan"
+  | "calendar"
   | "viewLog"
   | "history"
   | "hotkeyHint"
@@ -137,13 +137,29 @@ type CopyKey =
   | "inboxConnect"
   | "inboxDisconnect"
   | "inboxPromote"
+  | "inboxAdded"
   | "inboxDismiss"
+  | "inboxReminderHint"
+  | "suggestedReminder"
   | "inboxConnected"
   | "inboxNotConnected"
   | "inboxSetupHint"
+  | "inboxNoActivePlan"
+  | "quickNotes"
+  | "notePlaceholder"
+  | "noteReminder"
+  | "addNote"
+  | "reminderRequired"
+  | "reminders"
+  | "startNow"
+  | "remindLater"
+  | "setReminder"
   | "connectors"
   | "googleClientId"
-  | "googleClientIdHint";
+  | "googleClientIdHint"
+  | "googleClientSecret"
+  | "googleClientSecretHint"
+  | "saveGoogleOAuth";
 
 const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
   en: {
@@ -172,7 +188,6 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     done: "Done",
     thinking: "I’m thinking",
     delay: "Give me 5 more minutes",
-    smaller: "Make smaller",
     thinkingHold: "Got it. I’ll hold this step while you think.",
     nextPhysical: "No rush. When you’re ready, the next physical action is:",
     completePrompt: "This step looks complete. Mark it done?",
@@ -202,6 +217,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     openScreenshotFolder: "Open screenshot folder",
     deleteData: "Delete all local session data",
     viewPlan: "View plan",
+    calendar: "Calendar",
     viewLog: "Session log",
     history: "History",
     hotkeyHint: "Win+Shift+N toggles the sidebar.",
@@ -226,13 +242,29 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     inboxConnect: "Connect Gmail",
     inboxDisconnect: "Disconnect",
     inboxPromote: "Add to session",
+    inboxAdded: "Added",
     inboxDismiss: "Dismiss",
+    inboxReminderHint: "Pick a reminder before adding.",
+    suggestedReminder: "Suggested window",
     inboxConnected: "Connected",
     inboxNotConnected: "Not connected",
     inboxSetupHint: "Enter your Google OAuth Client ID in Settings to connect Gmail.",
+    inboxNoActivePlan: "No active plan right now. Make a plan from the main page first, then come back to add inbox items to the session.",
+    quickNotes: "Quick notes",
+    notePlaceholder: "Something to remember or add to the plan...",
+    noteReminder: "Reminder",
+    addNote: "Add to plan",
+    reminderRequired: "Choose a reminder time first.",
+    reminders: "Reminders",
+    startNow: "Start now",
+    remindLater: "Remind later",
+    setReminder: "Set reminder",
     connectors: "Connectors",
     googleClientId: "Google Client ID",
-    googleClientIdHint: "Create a Desktop app OAuth client at console.cloud.google.com"
+    googleClientIdHint: "Create a Desktop app OAuth client at console.cloud.google.com",
+    googleClientSecret: "Google Client Secret",
+    googleClientSecretHint: "Required for some Google OAuth client types; leave blank if your client does not have one.",
+    saveGoogleOAuth: "Save Google OAuth"
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -260,7 +292,6 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     done: "完成",
     thinking: "我在思考",
     delay: "再给我 5 分钟",
-    smaller: "再小一步",
     thinkingHold: "收到。我会先帮你保留这一步。",
     nextPhysical: "不急。准备好时，下一步身体动作是：",
     completePrompt: "这一步看起来已完成。要标记完成吗？",
@@ -290,6 +321,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     openScreenshotFolder: "打开截图文件夹",
     deleteData: "删除所有本地会话数据",
     viewPlan: "查看计划",
+    calendar: "日历",
     viewLog: "会话日志",
     history: "历史",
     hotkeyHint: "Win+Shift+N 可切换侧栏。",
@@ -314,13 +346,29 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     inboxConnect: "连接 Gmail",
     inboxDisconnect: "断开连接",
     inboxPromote: "加入任务",
+    inboxAdded: "已加入",
     inboxDismiss: "忽略",
+    inboxReminderHint: "加入前先选择提醒时间。",
+    suggestedReminder: "建议提醒时间",
     inboxConnected: "已连接",
     inboxNotConnected: "未连接",
     inboxSetupHint: "请在设置中输入 Google OAuth 客户端 ID 以连接 Gmail。",
+    inboxNoActivePlan: "当前没有活动计划。请先从主页创建计划，然后回来把邮件事项加入会话。",
+    quickNotes: "快速笔记",
+    notePlaceholder: "临时想到的事情，或想加入计划的想法...",
+    noteReminder: "提醒",
+    addNote: "加入计划",
+    reminderRequired: "请先选择提醒时间。",
+    reminders: "提醒",
+    startNow: "现在开始",
+    remindLater: "稍后提醒",
+    setReminder: "设置提醒",
     connectors: "连接器",
     googleClientId: "Google 客户端 ID",
-    googleClientIdHint: "在 console.cloud.google.com 创建桌面应用 OAuth 客户端"
+    googleClientIdHint: "在 console.cloud.google.com 创建桌面应用 OAuth 客户端",
+    googleClientSecret: "Google 客户端密钥",
+    googleClientSecretHint: "某些 Google OAuth 客户端类型需要；如果你的客户端没有密钥可留空。",
+    saveGoogleOAuth: "保存 Google OAuth"
   }
 };
 
@@ -426,6 +474,61 @@ function nextScheduledLabel(steps: Schedulable[]) {
   return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function defaultReminderLocal(minutes = 30) {
+  return toDateTimeLocal(new Date(Date.now() + minutes * 60_000).toISOString());
+}
+
+function nextLocalTime(hour: number, minute = 0) {
+  const date = new Date();
+  date.setHours(hour, minute, 0, 0);
+  if (date.getTime() <= Date.now()) date.setDate(date.getDate() + 1);
+  return toDateTimeLocal(date.toISOString());
+}
+
+function suggestedReminderForInboxItem(item: ActionItem) {
+  if (item.urgency === "high") return defaultReminderLocal(15);
+  if (item.suggestedTaskType === "Finance / bills") return defaultReminderLocal(60);
+  if (item.suggestedTaskType === "Email or admin") return defaultReminderLocal(30);
+  if (item.suggestedTaskType === "Planning") return nextLocalTime(9);
+  if (item.urgency === "medium") return defaultReminderLocal(90);
+  return nextLocalTime(10);
+}
+
+function localDateKey(value: string | number | Date) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "";
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function isToday(value?: string | null) {
+  return Boolean(value && localDateKey(value) === localDateKey(new Date()));
+}
+
+function calendarLabel(key: string) {
+  const [year, month, day] = key.split("-").map(Number);
+  const date = new Date(year, month - 1, day);
+  return date.toLocaleDateString([], { weekday: "long", month: "short", day: "numeric" });
+}
+
+function sameMonth(a: Date, b: Date) {
+  return a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth();
+}
+
+function monthTitle(date: Date) {
+  return date.toLocaleDateString([], { month: "long", year: "numeric" });
+}
+
+function monthCells(month: Date) {
+  const first = new Date(month.getFullYear(), month.getMonth(), 1);
+  const start = new Date(first);
+  start.setDate(first.getDate() - first.getDay());
+  return Array.from({ length: 42 }, (_value, index) => {
+    const date = new Date(start);
+    date.setDate(start.getDate() + index);
+    return date;
+  });
+}
+
 function playBannedSiteSound() {
   try {
     const ctx = new AudioContext();
@@ -454,7 +557,7 @@ function App() {
   const [snapshot, setSnapshot] = useSnapshot();
   const [view, setView] = useState<View>(() => {
     const route = location.hash.replace("#/", "");
-    return route === "plan" || route === "log" || route === "history" || route === "settings" || route === "inbox" ? route : "start";
+    return route === "plan" || route === "calendar" || route === "log" || route === "history" || route === "settings" || route === "inbox" ? route : "start";
   });
   const isOverlay = location.hash.startsWith("#/overlay");
   const isBlocker = location.hash.startsWith("#/blocker");
@@ -465,7 +568,7 @@ function App() {
 
   // Reset to start screen when a session closes so stale plan/log data doesn't persist
   useEffect(() => {
-    if (!sessionOpen && (view === "plan" || view === "log")) {
+    if (!sessionOpen && (view === "plan" || view === "calendar" || view === "log")) {
       setView("start");
     }
   }, [sessionOpen]);
@@ -487,21 +590,24 @@ function App() {
           </div>
         </div>
         <nav className="tabs">
-          <button className={view === "start" ? "active" : ""} onClick={() => setView("start")}>
-            <FileText size={16} /> {t("session")}
+          <button className={view === "start" ? "active" : ""} title={t("session")} onClick={() => setView("start")}>
+            <FileText size={16} /> <span className="nav-label">{t("session")}</span>
           </button>
           {sessionOpen && (
             <>
-              <button className={view === "plan" ? "active" : ""} onClick={() => setView("plan")}>
-                <ListChecks size={16} /> {t("viewPlan")}
+              <button className={view === "plan" ? "active" : ""} title={t("viewPlan")} onClick={() => setView("plan")}>
+                <ListChecks size={16} /> <span className="nav-label">{t("viewPlan")}</span>
               </button>
-              <button className={view === "log" ? "active" : ""} onClick={() => setView("log")}>
-                <Eye size={16} /> {t("viewLog")}
+              <button className={view === "calendar" ? "active" : ""} title={t("calendar")} onClick={() => setView("calendar")}>
+                <CalendarClock size={16} /> <span className="nav-label">{t("calendar")}</span>
+              </button>
+              <button className={view === "log" ? "active" : ""} title={t("viewLog")} onClick={() => setView("log")}>
+                <Eye size={16} /> <span className="nav-label">{t("viewLog")}</span>
               </button>
             </>
           )}
-          <button className={view === "inbox" ? "active" : ""} onClick={() => setView("inbox")} style={{ position: "relative" }}>
-            <Monitor size={16} /> {t("inboxTitle")}
+          <button className={view === "inbox" ? "active" : ""} title={t("inboxTitle")} onClick={() => setView("inbox")} style={{ position: "relative" }}>
+            <Monitor size={16} /> <span className="nav-label">{t("inboxTitle")}</span>
             {(() => {
               const inboxItems = (snapshot as any).inboxItems as ActionItem[] ?? [];
               const pendingCount = inboxItems.filter((i) => i.status === "pending").length;
@@ -510,11 +616,11 @@ function App() {
               ) : null;
             })()}
           </button>
-          <button className={view === "history" ? "active" : ""} onClick={() => setView("history")}>
-            <Clock size={16} /> {t("history")}
+          <button className={view === "history" ? "active" : ""} title={t("history")} onClick={() => setView("history")}>
+            <Clock size={16} /> <span className="nav-label">{t("history")}</span>
           </button>
-          <button className={view === "settings" ? "active" : ""} onClick={() => setView("settings")}>
-            <Settings size={16} /> {t("settings")}
+          <button className={view === "settings" ? "active" : ""} title={t("settings")} onClick={() => setView("settings")}>
+            <Settings size={16} /> <span className="nav-label">{t("settings")}</span>
           </button>
         </nav>
       </header>
@@ -523,7 +629,8 @@ function App() {
       {showHandoff && <ActiveSessionHandoff snapshot={snapshot} setSnapshot={setSnapshot} setView={setView} />}
       {!showHandoff && view === "start" && <SessionStart setSnapshot={setSnapshot} settings={snapshot.settings} />}
       {!showHandoff && view === "plan" && <PlanEditor snapshot={snapshot} setSnapshot={setSnapshot} />}
-      {!showHandoff && view === "log" && <SessionLog snapshot={snapshot} />}
+      {!showHandoff && view === "calendar" && <CalendarScreen snapshot={snapshot} />}
+      {!showHandoff && view === "log" && <SessionLog snapshot={snapshot} setSnapshot={setSnapshot} />}
       {!showHandoff && view === "history" && <SessionHistory />}
       {view === "inbox" && <InboxScreen snapshot={snapshot} language={snapshot.settings.language} />}
       {view === "settings" && <SettingsScreen snapshot={snapshot} setSnapshot={setSnapshot} />}
@@ -880,26 +987,28 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
               <SideTimetable snapshot={snapshot} />
             )}
           </div>
-          <div className="overlay-links">
-            {snapshot.session?.status === "active" && <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>{t("pauseSession")}</button>}
-            {snapshot.session?.status === "paused" && <button onClick={async () => setSnapshot(await window.nerve.resumeSession())}>{t("resumeSession")}</button>}
-            <button onClick={() => window.nerve.openMain("/plan")}>{t("viewPlan")}</button>
-            <button onClick={() => window.nerve.openMain("/log")}>{t("viewLog")}</button>
-            <button onClick={() => window.nerve.openMain("/settings")}>{t("settings")}</button>
-            {snapshot.session && snapshot.session.status !== "completed" && (
-              confirmEnd ? (
-                <div className="overlay-confirm-end">
-                  <p>{t("endSessionConfirm")}</p>
-                  <div className="overlay-confirm-btns">
-                    <button className="danger-sm" onClick={async () => { setConfirmEnd(false); setSnapshot(await window.nerve.endSession()); }}>{t("endSessionConfirmYes")}</button>
-                    <button onClick={() => setConfirmEnd(false)}>{t("endSessionConfirmNo")}</button>
+          {sideView === "step" && (
+            <div className="overlay-links">
+              {snapshot.session?.status === "active" && <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>{t("pauseSession")}</button>}
+              {snapshot.session?.status === "paused" && <button onClick={async () => setSnapshot(await window.nerve.resumeSession())}>{t("resumeSession")}</button>}
+              <button onClick={() => window.nerve.openMain("/plan")}>{t("viewPlan")}</button>
+              <button onClick={() => window.nerve.openMain("/log")}>{t("viewLog")}</button>
+              <button onClick={() => window.nerve.openMain("/settings")}>{t("settings")}</button>
+              {snapshot.session && snapshot.session.status !== "completed" && (
+                confirmEnd ? (
+                  <div className="overlay-confirm-end">
+                    <p>{t("endSessionConfirm")}</p>
+                    <div className="overlay-confirm-btns">
+                      <button className="danger-sm" onClick={async () => { setConfirmEnd(false); setSnapshot(await window.nerve.endSession()); }}>{t("endSessionConfirmYes")}</button>
+                      <button onClick={() => setConfirmEnd(false)}>{t("endSessionConfirmNo")}</button>
+                    </div>
                   </div>
-                </div>
-              ) : (
-                <button className="danger-sm" onClick={() => setConfirmEnd(true)}>{t("endSession")}</button>
-              )
-            )}
-          </div>
+                ) : (
+                  <button className="danger-sm" onClick={() => setConfirmEnd(true)}>{t("endSession")}</button>
+                )
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -934,9 +1043,38 @@ function BannedSiteCard({ snapshot }: { snapshot: AppSnapshot }) {
 function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
   const activeId = snapshot.activeStep?.id;
   const now = Date.now();
-  const steps = sortBySchedule(snapshot.steps);
+  const missedSteps = snapshot.steps.filter((step) =>
+    step.status !== "complete" && (
+      Boolean(step.dueAt && Date.parse(step.dueAt) < now) ||
+      Boolean(step.reminderAt && Date.parse(step.reminderAt) < now)
+    )
+  );
+  const missedStepIds = new Set(missedSteps.map((step) => step.id));
+  const missedReminders = snapshot.reminders.filter((reminder) =>
+    reminder.status !== "dismissed" &&
+    !reminder.stepId &&
+    (reminder.status === "triggered" || (reminder.status === "scheduled" && Date.parse(reminder.reminderAt) < now))
+  );
+  const steps = sortBySchedule(snapshot.steps).filter((step) =>
+    !missedStepIds.has(step.id) &&
+    step.status !== "complete" &&
+    (isToday(step.reminderAt) || isToday(step.dueAt))
+  );
+  const reminders = snapshot.reminders
+    .filter((reminder) =>
+      reminder.status !== "dismissed" &&
+      reminder.status !== "triggered" &&
+      !reminder.stepId &&
+      isToday(reminder.reminderAt) &&
+      Date.parse(reminder.reminderAt) >= now
+    )
+    .slice(0, 6);
   return (
     <section className="side-timetable">
+      {(steps.length > 0 || reminders.length > 0) && <h3 className="side-section-title">Upcoming</h3>}
+      {steps.length === 0 && reminders.length === 0 && missedSteps.length === 0 && missedReminders.length === 0 && (
+        <div className="side-empty">No same-day activity scheduled.</div>
+      )}
       {steps.map((step) => {
         const due = step.dueAt ? Date.parse(step.dueAt) : null;
         const isPastDue = Boolean(due && due < now && step.status !== "complete");
@@ -955,6 +1093,52 @@ function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
           </article>
         );
       })}
+      {reminders.length > 0 && (
+        <div className="side-reminders">
+          <h3>Reminders</h3>
+          {reminders.map((reminder) => (
+            <article className={reminder.status} key={reminder.id}>
+              <div className="side-time">
+                <span>{reminder.status}</span>
+                <strong>{timeLabel(reminder.reminderAt)}</strong>
+              </div>
+              <div className="side-activity">
+                <span>{reminder.taskType}</span>
+                <strong>{reminder.title}</strong>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
+      {(missedSteps.length > 0 || missedReminders.length > 0) && (
+        <div className="side-reminders missed">
+          <h3>Missed events</h3>
+          {missedSteps.slice(0, 4).map((step) => (
+            <article className="past-due" key={`missed-step-${step.id}`}>
+              <div className="side-time">
+                <span>Missed</span>
+                <strong>{timeLabel(step.reminderAt || step.dueAt)}</strong>
+              </div>
+              <div className="side-activity">
+                <span>{step.taskType}</span>
+                <strong>{step.title}</strong>
+              </div>
+            </article>
+          ))}
+          {missedReminders.slice(0, 4).map((reminder) => (
+            <article className="triggered" key={`missed-reminder-${reminder.id}`}>
+              <div className="side-time">
+                <span>{reminder.status}</span>
+                <strong>{timeLabel(reminder.reminderAt)}</strong>
+              </div>
+              <div className="side-activity">
+                <span>{reminder.taskType}</span>
+                <strong>{reminder.title}</strong>
+              </div>
+            </article>
+          ))}
+        </div>
+      )}
     </section>
   );
 }
@@ -974,7 +1158,7 @@ function StepCard({
   const t = useCopy(snapshot.settings.language);
   const paused = snapshot.session?.status === "paused";
   const { completed, percent, total } = completionStats(snapshot.steps);
-  async function action(type: "done" | "thinking" | "delay" | "atomize" | "markDone" | "keepWorking") {
+  async function action(type: "done" | "thinking" | "delay" | "markDone" | "keepWorking") {
     setSnapshot(await window.nerve.action(type));
   }
   if (!snapshot.session) {
@@ -1040,14 +1224,251 @@ function StepCard({
         <button onClick={() => action("delay")}>
           <Clock size={16} /> {t("delay")}
         </button>
-        <button onClick={() => action("atomize")}>
-          <ChevronLeft size={16} /> {t("smaller")}
-        </button>
         {!compact && (
           <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
             <Pause size={16} /> {t("pauseSession")}
           </button>
         )}
+      </div>
+    </section>
+  );
+}
+
+function QuickNotesSection({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
+  const t = useCopy(snapshot.settings.language);
+  const [note, setNote] = useState("");
+  const [reminderAt, setReminderAt] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const canAdd = note.trim().length > 0 && reminderAt;
+
+  async function addNote() {
+    if (!reminderAt) {
+      setError(t("reminderRequired"));
+      return;
+    }
+    try {
+      setError(null);
+      const refreshed = await window.nerve.addNoteToPlan({ note, reminderAt: fromDateTimeLocal(reminderAt) ?? "" });
+      setSnapshot(refreshed);
+      setNote("");
+      setReminderAt("");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("reminderRequired"));
+    }
+  }
+
+  return (
+    <section className="note-panel">
+      <div className="settings-section-head">
+        <FileText size={16} />
+        <h3>{t("quickNotes")}</h3>
+      </div>
+      <textarea value={note} onChange={(event) => setNote(event.target.value)} placeholder={t("notePlaceholder")} />
+      <div className="note-controls">
+        <label>
+          {t("noteReminder")}
+          <input type="datetime-local" value={reminderAt} onChange={(event) => setReminderAt(event.currentTarget.value)} />
+        </label>
+        <button className="primary" disabled={!canAdd} onClick={addNote}>
+          <Plus size={14} /> {t("addNote")}
+        </button>
+      </div>
+      {error && <p className="error-note">{error}</p>}
+    </section>
+  );
+}
+
+function ReminderPanel({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
+  const t = useCopy(snapshot.settings.language);
+  const [snoozeAt, setSnoozeAt] = useState<Record<string, string>>({});
+  const reminders = snapshot.reminders
+    .filter((reminder) => reminder.status !== "dismissed")
+    .slice()
+    .sort((a, b) => {
+      if (a.status === "triggered" && b.status !== "triggered") return -1;
+      if (a.status !== "triggered" && b.status === "triggered") return 1;
+      return a.reminderAt.localeCompare(b.reminderAt);
+    })
+    .slice(0, 8);
+
+  async function startNow(reminderId: string) {
+    setSnapshot(await window.nerve.startReminder(reminderId));
+  }
+
+  async function remindLater(reminderId: string) {
+    const value = snoozeAt[reminderId] || defaultReminderLocal(30);
+    setSnapshot(await window.nerve.snoozeReminder(reminderId, fromDateTimeLocal(value) ?? ""));
+  }
+
+  if (reminders.length === 0) return null;
+  return (
+    <section className="reminder-panel">
+      <div className="settings-section-head">
+        <CalendarClock size={16} />
+        <h3>{t("reminders")}</h3>
+      </div>
+      {reminders.map((reminder) => (
+        <article className={reminder.status} key={reminder.id}>
+          <div>
+            <strong>{reminder.title}</strong>
+            <span>{reminder.status} · {new Date(reminder.reminderAt).toLocaleString()}</span>
+          </div>
+          {reminder.message && <p>{reminder.message}</p>}
+          {reminder.status === "triggered" && (
+            <div className="reminder-actions">
+              <button className="primary" onClick={() => startNow(reminder.id)}>
+                <Play size={13} /> {t("startNow")}
+              </button>
+              <input
+                type="datetime-local"
+                value={snoozeAt[reminder.id] ?? defaultReminderLocal(30)}
+                onChange={(event) => setSnoozeAt({ ...snoozeAt, [reminder.id]: event.currentTarget.value })}
+              />
+              <button onClick={() => remindLater(reminder.id)}>
+                <Clock size={13} /> {t("remindLater")}
+              </button>
+            </div>
+          )}
+        </article>
+      ))}
+    </section>
+  );
+}
+
+type CalendarItem = {
+  id: string;
+  dateKey: string;
+  at: string;
+  kind: "reminder" | "due";
+  title: string;
+  subtitle: string;
+  status: string;
+  taskType: string;
+};
+
+function calendarItems(snapshot: AppSnapshot): CalendarItem[] {
+  const items: CalendarItem[] = [];
+  for (const step of snapshot.steps) {
+    if (step.reminderAt) {
+      items.push({
+        id: `${step.id}:reminder`,
+        dateKey: localDateKey(step.reminderAt),
+        at: step.reminderAt,
+        kind: "reminder",
+        title: step.title,
+        subtitle: step.nextAction,
+        status: step.status,
+        taskType: step.taskType
+      });
+    }
+    if (step.dueAt) {
+      items.push({
+        id: `${step.id}:due`,
+        dateKey: localDateKey(step.dueAt),
+        at: step.dueAt,
+        kind: "due",
+        title: step.title,
+        subtitle: step.deadlineText || "Due",
+        status: step.status,
+        taskType: step.taskType
+      });
+    }
+  }
+  for (const reminder of snapshot.reminders) {
+    if (reminder.status === "dismissed") continue;
+    if (reminder.stepId && reminder.status === "scheduled") continue;
+    items.push({
+      id: `reminder:${reminder.id}`,
+      dateKey: localDateKey(reminder.reminderAt),
+      at: reminder.reminderAt,
+      kind: "reminder",
+      title: reminder.title,
+      subtitle: reminder.message,
+      status: reminder.status,
+      taskType: reminder.taskType
+    });
+  }
+  return items
+    .filter((item) => item.dateKey)
+    .sort((a, b) => a.at.localeCompare(b.at));
+}
+
+function CalendarScreen({ snapshot }: { snapshot: AppSnapshot }) {
+  const t = useCopy(snapshot.settings.language);
+  const [month, setMonth] = useState(() => new Date());
+  const [selectedKey, setSelectedKey] = useState(() => localDateKey(new Date()));
+  const items = calendarItems(snapshot);
+  const grouped = new Map<string, CalendarItem[]>();
+  for (const item of items) {
+    grouped.set(item.dateKey, [...(grouped.get(item.dateKey) ?? []), item]);
+  }
+  const cells = monthCells(month);
+  const selectedItems = (grouped.get(selectedKey) ?? []).sort((a, b) => a.at.localeCompare(b.at));
+  const moveMonth = (delta: number) => {
+    const next = new Date(month);
+    next.setMonth(month.getMonth() + delta, 1);
+    setMonth(next);
+  };
+  return (
+    <section className="calendar-layout">
+      <div className="calendar-shell">
+        <div className="calendar-main">
+          <div className="calendar-toolbar">
+            <button title="Previous month" onClick={() => moveMonth(-1)}>
+              <ChevronLeft size={16} />
+            </button>
+            <div className="page-title compact">
+              <span className="eyebrow">Schedule</span>
+              <h2>{monthTitle(month)}</h2>
+            </div>
+            <button title="Next month" onClick={() => moveMonth(1)}>
+              <ChevronRight size={16} />
+            </button>
+          </div>
+          <div className="month-grid">
+            {["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"].map((day) => (
+              <span className="weekday" key={day}>{day}</span>
+            ))}
+            {cells.map((date) => {
+              const key = localDateKey(date);
+              const dayItems = grouped.get(key) ?? [];
+              return (
+                <button
+                  className={`calendar-cell ${sameMonth(date, month) ? "" : "outside"} ${key === selectedKey ? "selected" : ""} ${key === localDateKey(new Date()) ? "today" : ""}`}
+                  key={key}
+                  onClick={() => setSelectedKey(key)}
+                >
+                  <span>{date.getDate()}</span>
+                  {dayItems.length > 0 && (
+                    <strong>{dayItems.length}</strong>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        <aside className="calendar-detail">
+          <div className="calendar-day-head">
+            <h3>{calendarLabel(selectedKey)}</h3>
+            <span>{selectedItems.length}</span>
+          </div>
+          {selectedItems.length === 0 ? (
+            <EmptyState icon={<CalendarClock size={18} />} title="No activity" body="Scheduled notes, inbox items, reminders, and due dates will appear here." />
+          ) : (
+            <div className="calendar-items">
+              {selectedItems.map((item) => (
+                <article className={`${item.kind} ${item.status}`} key={item.id}>
+                  <time>{new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+                  <div>
+                    <strong>{item.title}</strong>
+                    <p>{item.subtitle}</p>
+                    <span>{item.kind === "due" ? "Due" : "Reminder"} · {item.taskType} · {item.status}</span>
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </aside>
       </div>
     </section>
   );
@@ -1074,6 +1495,8 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
     <section className="content-grid">
       <div className="side-stack">
         <StepCard snapshot={snapshot} setSnapshot={setSnapshot} />
+        <QuickNotesSection snapshot={snapshot} setSnapshot={setSnapshot} />
+        <ReminderPanel snapshot={snapshot} setSnapshot={setSnapshot} />
         <BreadcrumbTrail breadcrumbs={snapshot.breadcrumbs.slice(0, 8).reverse()} />
       </div>
       <div className="plan-list">
@@ -1352,7 +1775,7 @@ function LogTimeline({ events, breadcrumbs, steps }: Pick<SessionLogData, "event
 
 // ─── SessionLog (current session) ────────────────────────────────────────────
 
-function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
+function SessionLog({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   if (!snapshot.session) {
     return (
       <section className="log-layout">
@@ -1381,19 +1804,7 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
         <LogTimeline events={snapshot.events} breadcrumbs={snapshot.breadcrumbs} steps={snapshot.steps} />
       </div>
       <div className="gallery">
-        {snapshot.reminders.length > 0 && (
-          <section className="reminder-list">
-            <h2>Deadline reminders</h2>
-            {snapshot.reminders.slice(0, 10).map((reminder) => (
-              <article className={reminder.status} key={reminder.id}>
-                <strong>{reminder.title}</strong>
-                <span>{reminder.status} · remind {new Date(reminder.reminderAt).toLocaleString()}</span>
-                {reminder.dueAt && <span>due {new Date(reminder.dueAt).toLocaleString()}</span>}
-                <p>{reminder.message}</p>
-              </article>
-            ))}
-          </section>
-        )}
+        <ReminderPanel snapshot={snapshot} setSnapshot={setSnapshot} />
         <div className="section-head">
           <div className="page-title compact">
             <span className="eyebrow">Capture</span>
@@ -1529,12 +1940,14 @@ function InboxScreen({ snapshot, language }: { snapshot: AppSnapshot; language: 
   const t = useCopy(language);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [reminderDrafts, setReminderDrafts] = useState<Record<string, string>>({});
   const connectors = (snapshot as any).connectors as ConnectorStatus[] ?? [];
   const inboxItems = (snapshot as any).inboxItems as ActionItem[] ?? [];
   const gmailConnector = connectors.find((c) => c.name === "gmail");
   const isConnected = gmailConnector?.connected === true;
-  const pendingItems = inboxItems.filter((i) => i.status === "pending");
+  const visibleItems = inboxItems.filter((i) => i.status !== "dismissed");
   const googleClientId = (snapshot.settings as any).googleClientId as string ?? "";
+  const hasActivePlan = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
 
   async function handleConnect() {
     setBusy(true);
@@ -1573,6 +1986,25 @@ function InboxScreen({ snapshot, language }: { snapshot: AppSnapshot; language: 
   }
 
   async function handleUpdateItem(itemId: string, status: ActionItemStatus) {
+    if (status === "promoted" && !hasActivePlan) {
+      setError(t("inboxNoActivePlan"));
+      return;
+    }
+    if (status === "promoted") {
+      const item = inboxItems.find((candidate) => candidate.id === itemId);
+      const reminderAt = reminderDrafts[itemId] || (item ? suggestedReminderForInboxItem(item) : "");
+      if (!reminderAt) {
+        setError(t("reminderRequired"));
+        return;
+      }
+      try {
+        setError(null);
+        await window.nerve.promoteInboxItem(itemId, { reminderAt: fromDateTimeLocal(reminderAt) ?? "" });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to add item.");
+      }
+      return;
+    }
     try {
       await (window.nerve as any).updateInboxItem(itemId, status);
     } catch (err) {
@@ -1629,11 +2061,11 @@ function InboxScreen({ snapshot, language }: { snapshot: AppSnapshot; language: 
             </div>
           </div>
 
-          {pendingItems.length === 0 ? (
+          {visibleItems.length === 0 ? (
             <EmptyState icon={<Monitor size={18} />} title={t("inboxEmpty")} body="" />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
-              {pendingItems.map((item) => (
+              {visibleItems.map((item) => (
                 <article key={item.id} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
                   <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
                     <strong style={{ flex: 1, fontSize: "0.9rem" }}>{item.title}</strong>
@@ -1658,12 +2090,25 @@ function InboxScreen({ snapshot, language }: { snapshot: AppSnapshot; language: 
                     )}
                   </div>
                   <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
-                    <button className="primary" style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "promoted")}>
-                      <Plus size={13} /> {t("inboxPromote")}
+                    {item.status !== "promoted" && (
+                      <label className="inbox-reminder-field">
+                        {t("noteReminder")}
+                        <input
+                          type="datetime-local"
+                          value={reminderDrafts[item.id] ?? suggestedReminderForInboxItem(item)}
+                          onChange={(event) => setReminderDrafts({ ...reminderDrafts, [item.id]: event.currentTarget.value })}
+                          title={t("inboxReminderHint")}
+                        />
+                        <span>{t("suggestedReminder")}</span>
+                      </label>
+                    )}
+                    <button className="primary" disabled={item.status === "promoted"} style={{ fontSize: "0.8rem", padding: "4px 12px" }} title={!hasActivePlan ? t("inboxNoActivePlan") : undefined} onClick={() => handleUpdateItem(item.id, "promoted")}>
+                      {item.status === "promoted" ? <Check size={13} /> : <Plus size={13} />}
+                      {item.status === "promoted" ? t("inboxAdded") : t("inboxPromote")}
                     </button>
-                    <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
+                    {item.status !== "promoted" && <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
                       {t("inboxDismiss")}
-                    </button>
+                    </button>}
                   </div>
                 </article>
               ))}
@@ -1739,11 +2184,32 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
                 type="text"
                 value={(settings as any).googleClientId ?? ""}
                 onChange={(event) => setSettings({ ...settings, googleClientId: event.target.value } as any)}
-                onBlur={() => save({ googleClientId: (settings as any).googleClientId } as any)}
                 placeholder="1234567890-abc...apps.googleusercontent.com"
               />
               <span className="subtle" style={{ fontSize: "0.75rem", marginTop: 4, display: "block" }}>{t("googleClientIdHint")}</span>
             </label>
+            <label className="wide-field">
+              {t("googleClientSecret")}
+              <input
+                type="password"
+                value={(settings as any).googleClientSecret ?? ""}
+                onChange={(event) => setSettings({ ...settings, googleClientSecret: event.target.value } as any)}
+                onBlur={() => save({ googleClientSecret: (settings as any).googleClientSecret } as any)}
+                placeholder="GOCSPX-..."
+              />
+              <span className="subtle" style={{ fontSize: "0.75rem", marginTop: 4, display: "block" }}>{t("googleClientSecretHint")}</span>
+            </label>
+            <div className="wide-field">
+              <button
+                onClick={() => save({
+                  googleClientId: (settings as any).googleClientId,
+                  googleClientSecret: (settings as any).googleClientSecret
+                } as any)}
+                style={{ width: "fit-content" }}
+              >
+                <KeyRound size={15} /> {t("saveGoogleOAuth")}
+              </button>
+            </div>
           </div>
           {(() => {
             const connectors = (snapshot as any).connectors as ConnectorStatus[] ?? [];

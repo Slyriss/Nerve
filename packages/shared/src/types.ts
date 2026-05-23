@@ -368,6 +368,7 @@ export interface NerveSettings {
   soundEnabled: boolean;
   gmailEnabled: boolean;
   googleClientId: string;
+  googleClientSecret: string;
 }
 
 export interface AppSnapshot {
@@ -408,5 +409,6 @@ export const defaultSettings: NerveSettings = {
   bannedSites: ["youtube.com", "tiktok.com", "instagram.com", "reddit.com", "netflix.com"],
   soundEnabled: false,
   gmailEnabled: false,
-  googleClientId: ""
+  googleClientId: "",
+  googleClientSecret: ""
 };

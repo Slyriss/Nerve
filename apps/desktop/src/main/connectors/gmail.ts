@@ -4,6 +4,8 @@ import { net, safeStorage, shell } from "electron";
 import http from "node:http";
 import crypto from "node:crypto";
 
+export const DEFAULT_GOOGLE_CLIENT_ID = "1092609867457-ops0dv1svm1k59no81q17tturn11kkb5.apps.googleusercontent.com";
+
 export interface GmailTokens {
   accessToken: string;
   refreshToken: string;
@@ -40,7 +42,14 @@ function generatePKCE() {
   return { verifier, challenge };
 }
 
-async function netFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<{ ok: boolean; status: number; json: () => Promise<unknown> }> {
+interface NetFetchResponse {
+  ok: boolean;
+  status: number;
+  text: () => Promise<string>;
+  json: () => Promise<unknown>;
+}
+
+async function netFetch(url: string, options: { method?: string; headers?: Record<string, string>; body?: string } = {}): Promise<NetFetchResponse> {
   return new Promise((resolve, reject) => {
     const req = net.request({ url, method: options.method ?? "GET" });
     if (options.headers) {
@@ -54,7 +63,8 @@ async function netFetch(url: string, options: { method?: string; headers?: Recor
         resolve({
           ok: res.statusCode >= 200 && res.statusCode < 300,
           status: res.statusCode,
-          json: () => Promise.resolve(JSON.parse(text))
+          text: () => Promise.resolve(text),
+          json: () => Promise.resolve(text ? JSON.parse(text) : null)
         });
       });
     });
@@ -65,8 +75,9 @@ async function netFetch(url: string, options: { method?: string; headers?: Recor
 }
 
 // Start OAuth flow. Returns tokens on success or throws.
-export async function startGmailOAuth(clientId: string): Promise<GmailTokens> {
+export async function startGmailOAuth(clientId: string, clientSecret = ""): Promise<GmailTokens> {
   const { verifier, challenge } = generatePKCE();
+  const state = crypto.randomBytes(16).toString("base64url");
   const port = await getFreePort();
   const redirectUri = `http://127.0.0.1:${port}/oauth/callback`;
 
@@ -79,6 +90,7 @@ export async function startGmailOAuth(clientId: string): Promise<GmailTokens> {
   authUrl.searchParams.set("code_challenge_method", "S256");
   authUrl.searchParams.set("access_type", "offline");
   authUrl.searchParams.set("prompt", "consent");
+  authUrl.searchParams.set("state", state);
 
   // Open browser for user to authorize
   void shell.openExternal(authUrl.toString());
@@ -88,11 +100,16 @@ export async function startGmailOAuth(clientId: string): Promise<GmailTokens> {
       const url = new URL(req.url!, `http://127.0.0.1:${port}`);
       const code = url.searchParams.get("code");
       const error = url.searchParams.get("error");
+      const returnedState = url.searchParams.get("state");
       res.writeHead(200, { "Content-Type": "text/html" });
-      if (code) {
+      if (code && returnedState === state) {
         res.end("<html><body><h2>Nerve: Gmail connected! You can close this tab.</h2></body></html>");
         server.close();
         resolve(code);
+      } else if (code) {
+        res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
+        server.close();
+        reject(new Error("OAuth state mismatch"));
       } else {
         res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
         server.close();
@@ -103,26 +120,30 @@ export async function startGmailOAuth(clientId: string): Promise<GmailTokens> {
     server.on("error", reject);
   });
 
-  // Exchange code for tokens (PKCE — no client_secret needed for Desktop app type)
+  const tokenBody = new URLSearchParams({
+    code,
+    client_id: clientId,
+    redirect_uri: redirectUri,
+    grant_type: "authorization_code",
+    code_verifier: verifier
+  });
+  if (clientSecret) tokenBody.set("client_secret", clientSecret);
+
+  // Exchange code for tokens. Some Google OAuth client types require client_secret even with PKCE.
   const tokenRes = await netFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      code,
-      client_id: clientId,
-      redirect_uri: redirectUri,
-      grant_type: "authorization_code",
-      code_verifier: verifier
-    }).toString()
+    body: tokenBody.toString()
   });
 
-  if (!tokenRes.ok) throw new Error(`Token exchange failed: ${tokenRes.status}`);
+  if (!tokenRes.ok) throw new Error(await googleApiError("Token exchange failed", tokenRes));
   const tokenData = await tokenRes.json() as any;
 
   // Get user email
   const userRes = await netFetch("https://www.googleapis.com/oauth2/v2/userinfo", {
     headers: { Authorization: `Bearer ${tokenData.access_token}` }
   });
+  if (!userRes.ok) throw new Error(await googleApiError("User info fetch failed", userRes));
   const userData = await userRes.json() as any;
 
   return {
@@ -134,18 +155,20 @@ export async function startGmailOAuth(clientId: string): Promise<GmailTokens> {
 }
 
 // Refresh the access token using the stored refresh token
-export async function refreshGmailToken(clientId: string, encryptedRefreshToken: string): Promise<{ accessToken: string; expiresAt: string }> {
+export async function refreshGmailToken(clientId: string, encryptedRefreshToken: string, clientSecret = ""): Promise<{ accessToken: string; expiresAt: string }> {
   const refreshToken = decryptToken(encryptedRefreshToken);
+  const tokenBody = new URLSearchParams({
+    grant_type: "refresh_token",
+    refresh_token: refreshToken,
+    client_id: clientId
+  });
+  if (clientSecret) tokenBody.set("client_secret", clientSecret);
   const res = await netFetch("https://oauth2.googleapis.com/token", {
     method: "POST",
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: new URLSearchParams({
-      grant_type: "refresh_token",
-      refresh_token: refreshToken,
-      client_id: clientId
-    }).toString()
+    body: tokenBody.toString()
   });
-  if (!res.ok) throw new Error(`Token refresh failed: ${res.status}`);
+  if (!res.ok) throw new Error(await googleApiError("Token refresh failed", res));
   const data = await res.json() as any;
   return {
     accessToken: data.access_token,
@@ -160,7 +183,7 @@ export async function fetchGmailMessages(accessToken: string, maxMessages = 20, 
     `https://gmail.googleapis.com/gmail/v1/users/me/messages?q=${encodeURIComponent(query)}&maxResults=${maxMessages}`,
     { headers: { Authorization: `Bearer ${accessToken}` } }
   );
-  if (!listRes.ok) throw new Error(`Gmail list failed: ${listRes.status}`);
+  if (!listRes.ok) throw new Error(await googleApiError("Gmail list failed", listRes));
   const listData = await listRes.json() as any;
   const messages: RawGmailMessage[] = [];
   for (const msg of (listData.messages ?? []).slice(0, maxMessages)) {
@@ -196,7 +219,7 @@ function parseGmailMessage(raw: any): RawGmailMessage {
 function extractBody(payload: any): string {
   if (!payload) return "";
   if (payload.mimeType === "text/plain" && payload.body?.data) {
-    return Buffer.from(payload.body.data, "base64").toString("utf8");
+    return Buffer.from(payload.body.data, "base64url").toString("utf8");
   }
   for (const part of (payload.parts ?? [])) {
     const text = extractBody(part);
@@ -214,4 +237,19 @@ function getFreePort(): Promise<number> {
     });
     server.on("error", reject);
   });
+}
+
+async function googleApiError(prefix: string, response: NetFetchResponse): Promise<string> {
+  const body = await response.text();
+  if (!body) return `${prefix}: ${response.status}`;
+  try {
+    const parsed = JSON.parse(body) as { error?: string | { message?: string; error_description?: string }; error_description?: string };
+    if (typeof parsed.error === "string") {
+      return `${prefix}: ${response.status} ${parsed.error_description ?? parsed.error}`;
+    }
+    const message = parsed.error?.message ?? parsed.error?.error_description ?? parsed.error_description;
+    return `${prefix}: ${response.status}${message ? ` ${message}` : ""}`;
+  } catch {
+    return `${prefix}: ${response.status} ${body.slice(0, 300)}`;
+  }
 }

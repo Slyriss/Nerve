@@ -35,6 +35,13 @@ const nerve = {
   fetchInbox: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:fetchInbox"),
   updateInboxItem: (itemId: string, status: "pending" | "promoted" | "dismissed"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateInboxItem", itemId, status),
+  promoteInboxItem: (itemId: string, input: { reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("nerve:promoteInboxItem", itemId, input),
+  addNoteToPlan: (input: { note: string; reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("nerve:addNoteToPlan", input),
+  startReminder: (reminderId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:startReminder", reminderId),
+  snoozeReminder: (reminderId: string, reminderAt: string): Promise<AppSnapshot> =>
+    ipcRenderer.invoke("nerve:snoozeReminder", reminderId, reminderAt),
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) => callback(snapshot);
     ipcRenderer.on("nerve:snapshot", listener);

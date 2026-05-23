@@ -28,6 +28,10 @@ interface NerveBridge {
   disconnectGmail: () => Promise<AppSnapshot>;
   fetchInbox: () => Promise<AppSnapshot>;
   updateInboxItem: (itemId: string, status: ActionItemStatus) => Promise<AppSnapshot>;
+  promoteInboxItem: (itemId: string, input: { reminderAt: string; dueAt?: string | null }) => Promise<AppSnapshot>;
+  addNoteToPlan: (input: { note: string; reminderAt: string; dueAt?: string | null }) => Promise<AppSnapshot>;
+  startReminder: (reminderId: string) => Promise<AppSnapshot>;
+  snoozeReminder: (reminderId: string, reminderAt: string) => Promise<AppSnapshot>;
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => () => void;
 }
 

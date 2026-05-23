@@ -88,6 +88,22 @@ $env:DEEPSEEK_MODEL  = "deepseek-chat"
 pnpm dev
 ```
 
+## Using Gmail
+
+Nerve can connect Gmail in read-only mode from the Inbox screen. The app seeds this Google OAuth Client ID by default:
+
+```powershell
+1092609867457-ops0dv1svm1k59no81q17tturn11kkb5.apps.googleusercontent.com
+```
+
+You can override it before launch if you need a different OAuth client:
+
+```powershell
+$env:NERVE_GOOGLE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
+$env:NERVE_GOOGLE_CLIENT_SECRET = "your-client-secret-if-required"
+pnpm dev
+```
+
 ## Data and privacy
 
 All session data (steps, observations, breadcrumbs, screenshots) is stored locally at:

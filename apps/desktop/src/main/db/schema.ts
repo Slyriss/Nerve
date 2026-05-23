@@ -152,6 +152,30 @@ export const settingsTable = sqliteTable("settings", {
   updatedAt: text("updated_at").notNull()
 });
 
+export const connectorTokens = sqliteTable("connector_tokens", {
+  connector: text("connector").primaryKey(),
+  accessToken: text("access_token"),
+  refreshToken: text("refresh_token"),
+  email: text("email"),
+  expiresAt: text("expires_at"),
+  createdAt: text("created_at").notNull(),
+  updatedAt: text("updated_at").notNull()
+});
+
+export const inboxItems = sqliteTable("inbox_items", {
+  id: text("id").primaryKey(),
+  source: text("source").notNull(),
+  sourceMessageId: text("source_message_id").notNull(),
+  title: text("title").notNull(),
+  description: text("description").notNull().default(""),
+  urgency: text("urgency").notNull().default("low"),
+  suggestedTaskType: text("suggested_task_type").notNull().default("Email or admin"),
+  dueHint: text("due_hint"),
+  status: text("status").notNull().default("pending"),
+  extractedAt: text("extracted_at").notNull(),
+  createdAt: text("created_at").notNull()
+});
+
 export const schema = {
   sessions,
   steps,
@@ -163,5 +187,7 @@ export const schema = {
   breadcrumbs,
   taskHistory,
   reminders,
-  settingsTable
+  settingsTable,
+  connectorTokens,
+  inboxItems
 };

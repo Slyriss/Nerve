@@ -60,6 +60,9 @@ export type Urgency = "low" | "medium";
 export type BreadcrumbRelevance = "productive" | "unproductive" | "unknown";
 export type DisplayLanguage = "en" | "zh";
 export type ReminderStatus = "scheduled" | "triggered" | "dismissed";
+export type ConnectorName = "gmail";
+export type ActionItemStatus = "pending" | "promoted" | "dismissed";
+export type ActionItemUrgency = "low" | "medium" | "high";
 
 export interface PlanStepDraft {
   title: string;
@@ -312,6 +315,43 @@ export interface BannedSiteAlert {
   detectedAt: string;
 }
 
+export interface ConnectorMessage {
+  id: string;
+  source: ConnectorName;
+  subject?: string;
+  body: string;
+  sender: string;
+  receivedAt: string;
+  isRead: boolean;
+  threadId?: string;
+}
+
+export interface ActionItem {
+  id: string;
+  title: string;
+  description: string;
+  source: ConnectorName;
+  sourceMessageId: string;
+  urgency: ActionItemUrgency;
+  suggestedTaskType: TaskType;
+  dueHint?: string;
+  extractedAt: string;
+  status: ActionItemStatus;
+}
+
+export interface ConnectorStatus {
+  name: ConnectorName;
+  connected: boolean;
+  lastFetchedAt?: string | null;
+  email?: string | null;
+  error?: string | null;
+}
+
+export interface FetchInboxOptions {
+  maxMessages?: number;
+  unreadOnly?: boolean;
+}
+
 export interface NerveSettings {
   aiProvider: AIProviderName;
   deepseekApiKey: string;
@@ -326,6 +366,9 @@ export interface NerveSettings {
   bannedSitesEnabled: boolean;
   bannedSites: string[];
   soundEnabled: boolean;
+  gmailEnabled: boolean;
+  googleClientId: string;
+  googleClientSecret: string;
 }
 
 export interface AppSnapshot {
@@ -347,6 +390,8 @@ export interface AppSnapshot {
   bannedSiteAlert: BannedSiteAlert | null;
   bannedSiteStrikeCount: number;
   screenshotFolder: string;
+  connectors: ConnectorStatus[];
+  inboxItems: ActionItem[];
 }
 
 export const defaultSettings: NerveSettings = {
@@ -362,5 +407,8 @@ export const defaultSettings: NerveSettings = {
   language: "en",
   bannedSitesEnabled: false,
   bannedSites: ["youtube.com", "tiktok.com", "instagram.com", "reddit.com", "netflix.com"],
-  soundEnabled: false
+  soundEnabled: false,
+  gmailEnabled: false,
+  googleClientId: "",
+  googleClientSecret: ""
 };

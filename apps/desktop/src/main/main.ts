@@ -57,6 +57,7 @@ let currentBreadcrumbId: string | null = null;
 let currentBreadcrumbKey: string | null = null;
 let currentBreadcrumbStartedAt: string | null = null;
 let cachedSettings: NerveSettings | null = null;
+let isQuitting = false;
 
 const overlaySlimWidth = 56;
 const overlayExpandedWidth = 260;
@@ -151,6 +152,26 @@ function normalizePlanSteps(steps: PlanStepDraft[], fallbackTaskType: TaskType):
       dueAt: validIso(step.dueAt),
       reminderAt: validIso(step.reminderAt)
     }));
+}
+
+function scheduleTimeForStep(step: Pick<PlanStepDraft, "reminderAt" | "dueAt">) {
+  const reminder = step.reminderAt ? Date.parse(step.reminderAt) : Number.POSITIVE_INFINITY;
+  const due = step.dueAt ? Date.parse(step.dueAt) : Number.POSITIVE_INFINITY;
+  const firstScheduledTime = Math.min(
+    Number.isFinite(reminder) ? reminder : Number.POSITIVE_INFINITY,
+    Number.isFinite(due) ? due : Number.POSITIVE_INFINITY
+  );
+  return firstScheduledTime;
+}
+
+function sortPlanStepsBySchedule(steps: PlanStepDraft[]) {
+  return steps
+    .map((step, index) => ({ step, index }))
+    .sort((a, b) => {
+      const diff = scheduleTimeForStep(a.step) - scheduleTimeForStep(b.step);
+      return Number.isFinite(diff) ? diff : a.index - b.index;
+    })
+    .map(({ step }) => step);
 }
 
 function localDateTimeContext() {
@@ -1028,7 +1049,18 @@ function createOverlayWindow() {
   overlayWindow.setAlwaysOnTop(true, "screen-saver");
   overlayWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
   overlayWindow.on("moved", applyOverlayBounds);
+  overlayWindow.on("closed", () => {
+    overlayWindow = null;
+  });
   void loadWindow(overlayWindow, "/overlay");
+}
+
+function closeOverlayWindow() {
+  const window = overlayWindow;
+  overlayWindow = null;
+  if (window && !window.isDestroyed()) {
+    window.close();
+  }
 }
 
 function createMainWindow(route = "/") {
@@ -1054,6 +1086,12 @@ function createMainWindow(route = "/") {
   });
   mainWindow.on("closed", () => {
     mainWindow = null;
+  });
+  mainWindow.on("close", () => {
+    if (isQuitting) return;
+    isQuitting = true;
+    closeOverlayWindow();
+    app.quit();
   });
   void loadWindow(mainWindow, route);
 }
@@ -1091,7 +1129,7 @@ function registerIpc() {
       activeApp: activeWindow.activeApp,
       windowTitle: activeWindow.windowTitle
     });
-    const steps = normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType);
+    const steps = sortPlanStepsBySchedule(normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType));
     if (steps.length === 0) {
       throw new Error("DeepSeek did not return any usable tasks.");
     }
@@ -1611,4 +1649,11 @@ app.whenReady().then(() => {
   }
 });
 
-app.on("window-all-closed", () => {});
+app.on("before-quit", () => {
+  isQuitting = true;
+  closeOverlayWindow();
+});
+
+app.on("window-all-closed", () => {
+  app.quit();
+});

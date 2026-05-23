@@ -277,7 +277,6 @@ h2 {
   gap: 18px;
 }
 
-.fixed-row,
 .section-head,
 .button-row,
 .overlay-head,
@@ -286,17 +285,6 @@ h2 {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
-}
-
-.fixed-row {
-  padding: 10px 12px;
-  border-radius: 13px;
-  background: rgba(255, 255, 255, 0.38);
-  border: 1px solid rgba(255, 255, 255, 0.54);
-}
-
-.fixed-row strong {
-  color: var(--sage);
 }
 
 .scope-grid {
@@ -363,6 +351,13 @@ h2 {
   background: rgba(232, 246, 240, 0.74);
   color: #38685c;
   font-weight: 730;
+}
+
+.time-field {
+  gap: 4px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
 }
 
 .timetable-row input,
@@ -873,13 +868,15 @@ body:has(.overlay) {
 .side-time,
 .side-activity {
   display: grid;
-  gap: 2px;
+  gap: 1px;
   min-width: 0;
+  align-content: start;
 }
 
 .side-time strong {
   font-size: 11px;
   color: #33413b;
+  line-height: 1.15;
 }
 
 .side-time span,

@@ -235,6 +235,28 @@ function fromDateTimeLocal(value: string) {
   return value ? new Date(value).toISOString() : null;
 }
 
+type Schedulable = { reminderAt?: string | null; dueAt?: string | null };
+
+function scheduleTime(step: Schedulable) {
+  const reminder = step.reminderAt ? Date.parse(step.reminderAt) : Number.POSITIVE_INFINITY;
+  const due = step.dueAt ? Date.parse(step.dueAt) : Number.POSITIVE_INFINITY;
+  return Math.min(Number.isFinite(reminder) ? reminder : Number.POSITIVE_INFINITY, Number.isFinite(due) ? due : Number.POSITIVE_INFINITY);
+}
+
+function sortBySchedule<T extends Schedulable>(steps: T[]) {
+  return steps
+    .map((step, index) => ({ step, index }))
+    .sort((a, b) => {
+      const diff = scheduleTime(a.step) - scheduleTime(b.step);
+      return Number.isFinite(diff) ? diff : a.index - b.index;
+    })
+    .map(({ step }) => step);
+}
+
+function timeLabel(value?: string | null) {
+  return value ? new Date(value).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--";
+}
+
 function fileSrc(filePath: string) {
   return `nerve-file://local/${encodeURIComponent(filePath)}`;
 }
@@ -360,7 +382,7 @@ function SessionStart({
       const parsed = await window.nerve.parseTaskList({
         goal: goal.trim()
       });
-      setParsedSteps(parsed.steps);
+      setParsedSteps(sortBySchedule(parsed.steps));
       setDetectedTaskTypes(parsed.taskTypes);
     } catch (parseError) {
       setError(parseError instanceof Error ? parseError.message : "The task list could not be parsed.");
@@ -402,10 +424,6 @@ function SessionStart({
             placeholder="Finish math research, walk the dog at 3pm, shower at 5pm, dinner at 6pm..."
           />
         </label>
-        <div className="fixed-row">
-          <span>Scope detection</span>
-          <strong>{detectedTaskTypes.length ? detectedTaskTypes.join(" + ") : "Automatic from your description"}</strong>
-        </div>
         <div className="button-row">
           <button disabled={!goal.trim() || parseBusy || busy} onClick={parse}>
             <ListChecks size={16} /> {parseBusy ? "Parsing..." : "Parse task list"}
@@ -439,16 +457,22 @@ function SessionStart({
               <article className="timetable-row" key={`${step.title}-${index}`}>
                 <div className="time-cell">
                   <span>{index + 1}</span>
-                  <input
-                    type="datetime-local"
-                    value={toDateTimeLocal(step.dueAt)}
-                    onChange={(event) => patchParsedStep(index, { dueAt: fromDateTimeLocal(event.currentTarget.value) })}
-                  />
-                  <input
-                    type="datetime-local"
-                    value={toDateTimeLocal(step.reminderAt)}
-                    onChange={(event) => patchParsedStep(index, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })}
-                  />
+                  <label className="time-field">
+                    Remind
+                    <input
+                      type="datetime-local"
+                      value={toDateTimeLocal(step.reminderAt)}
+                      onChange={(event) => patchParsedStep(index, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })}
+                    />
+                  </label>
+                  <label className="time-field">
+                    Due
+                    <input
+                      type="datetime-local"
+                      value={toDateTimeLocal(step.dueAt)}
+                      onChange={(event) => patchParsedStep(index, { dueAt: fromDateTimeLocal(event.currentTarget.value) })}
+                    />
+                  </label>
                 </div>
                 <div className="activity-fields">
                   <input value={step.title} onChange={(event) => patchParsedStep(index, { title: event.currentTarget.value })} />
@@ -478,9 +502,6 @@ function SessionStart({
         <div className="button-row">
           <button className="primary" disabled={!goal.trim() || busy} onClick={start}>
             <Check size={16} /> {t("startSession")}
-          </button>
-          <button onClick={() => window.nerve.openMain("/settings")}>
-            <Settings size={16} /> {t("settings")}
           </button>
         </div>
         <p className="subtle">{t("currentProvider")}: DeepSeek</p>
@@ -564,16 +585,18 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
 function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
   const activeId = snapshot.activeStep?.id;
   const now = Date.now();
+  const steps = sortBySchedule(snapshot.steps);
   return (
     <section className="side-timetable">
-      {snapshot.steps.map((step) => {
+      {steps.map((step) => {
         const due = step.dueAt ? Date.parse(step.dueAt) : null;
         const isPastDue = Boolean(due && due < now && step.status !== "complete");
         return (
           <article className={`${step.status} ${step.id === activeId ? "current" : ""} ${isPastDue ? "past-due" : ""}`} key={step.id}>
             <div className="side-time">
-              <strong>{step.dueAt ? new Date(step.dueAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "--"}</strong>
-              {step.reminderAt && <span>{new Date(step.reminderAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
+              <span>Remind</span>
+              <strong>{timeLabel(step.reminderAt)}</strong>
+              <span>Due {timeLabel(step.dueAt)}</span>
             </div>
             <div className="side-activity">
               <span>{step.taskType}</span>
@@ -675,12 +698,12 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
               <input placeholder="Deadline text" defaultValue={step.deadlineText} onBlur={(event) => patch(step, { deadlineText: event.currentTarget.value })} />
               <div className="deadline-fields">
                 <label>
-                  Due
-                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
-                </label>
-                <label>
                   Remind
                   <input type="datetime-local" defaultValue={toDateTimeLocal(step.reminderAt)} onBlur={(event) => patch(step, { reminderAt: fromDateTimeLocal(event.currentTarget.value) })} />
+                </label>
+                <label>
+                  Due
+                  <input type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
                 </label>
               </div>
               <select value={step.taskType} onChange={(event) => patch(step, { taskType: event.currentTarget.value as TaskType })}>

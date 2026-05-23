@@ -174,6 +174,13 @@ export interface SessionSummaryRecord extends SessionRecord {
   lastEventType?: string | null;
 }
 
+export interface SessionLogData {
+  session: SessionRecord;
+  events: EventRecord[];
+  breadcrumbs: BreadcrumbRecord[];
+  steps: StepRecord[];
+}
+
 export interface StepRecord {
   id: string;
   sessionId: string;
@@ -318,6 +325,7 @@ export interface NerveSettings {
   language: DisplayLanguage;
   bannedSitesEnabled: boolean;
   bannedSites: string[];
+  soundEnabled: boolean;
 }
 
 export interface AppSnapshot {
@@ -337,6 +345,7 @@ export interface AppSnapshot {
   delayUntil: string | null;
   thinkingPauseUntil: string | null;
   bannedSiteAlert: BannedSiteAlert | null;
+  bannedSiteStrikeCount: number;
   screenshotFolder: string;
 }
 
@@ -352,5 +361,6 @@ export const defaultSettings: NerveSettings = {
   storeScreenshots: true,
   language: "en",
   bannedSitesEnabled: false,
-  bannedSites: ["youtube.com", "tiktok.com", "instagram.com", "reddit.com", "netflix.com"]
+  bannedSites: ["youtube.com", "tiktok.com", "instagram.com", "reddit.com", "netflix.com"],
+  soundEnabled: false
 };

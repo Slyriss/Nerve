@@ -1,7 +1,8 @@
-import { useEffect, useState, Component, type ReactNode } from "react";
+import { useEffect, useRef, useState, Component, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";
 import {
   Activity,
+  AlertTriangle,
   ArrowDown,
   ArrowUp,
   CalendarClock,
@@ -17,15 +18,17 @@ import {
   KeyRound,
   ListChecks,
   Minimize2,
+  Monitor,
   Pause,
   Play,
   Plus,
   RefreshCw,
   Settings,
   ShieldCheck,
-  Trash2
+  Trash2,
+  Zap
 } from "lucide-react";
-import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type SessionSummaryRecord, type StepRecord, type TaskType } from "@nerve/shared";
+import { taskTypes, type AppSnapshot, type BreadcrumbRecord, type EventRecord, type NerveSettings, type PlanStepDraft, type SessionLogData, type SessionSummaryRecord, type StepRecord, type TaskType } from "@nerve/shared";
 import "./styles.css";
 
 type View = "start" | "plan" | "log" | "history" | "settings";
@@ -93,7 +96,15 @@ type CopyKey =
   | "bannedSitesHelp"
   | "bannedSiteTitle"
   | "bannedSiteBody"
-  | "bannedSiteAction";
+  | "bannedSiteBody2"
+  | "bannedSiteBody3"
+  | "bannedSiteAction"
+  | "soundEnabled"
+  | "endSessionConfirm"
+  | "endSessionConfirmYes"
+  | "endSessionConfirmNo"
+  | "replanSession"
+  | "replanning";
 
 const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
   en: {
@@ -160,7 +171,15 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     bannedSitesHelp: "One domain per line. Nerve detects these locally from the active browser window when Windows exposes the page URL or title.",
     bannedSiteTitle: "Leave this site.",
     bannedSiteBody: "This site is on your banned list for this session. Close it or switch back to the task now.",
-    bannedSiteAction: "Return to the current task:"
+    bannedSiteBody2: "You came back. Close it and refocus.",
+    bannedSiteBody3: "Third time. Close this tab and don't come back.",
+    bannedSiteAction: "Return to the current task:",
+    soundEnabled: "Sound alert on detection",
+    endSessionConfirm: "You still have steps to go. End the session anyway?",
+    endSessionConfirmYes: "Yes, end it",
+    endSessionConfirmNo: "Keep going",
+    replanSession: "Re-plan from here",
+    replanning: "Regenerating plan…"
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -226,7 +245,15 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     bannedSitesHelp: "每行一个域名。Windows 暴露当前浏览器 URL 或标题时，Nerve 会在本地检测这些网站。",
     bannedSiteTitle: "离开这个网站。",
     bannedSiteBody: "这个网站在你的禁止列表里。现在关闭它，或切回当前任务。",
-    bannedSiteAction: "回到当前任务："
+    bannedSiteBody2: "你又回来了。关掉它，重新集中注意力。",
+    bannedSiteBody3: "第三次了。关掉这个标签页，别再来了。",
+    bannedSiteAction: "回到当前任务：",
+    soundEnabled: "检测到时播放声音提醒",
+    endSessionConfirm: "你还有步骤未完成，确定要结束会话吗？",
+    endSessionConfirmYes: "是的，结束",
+    endSessionConfirmNo: "继续进行",
+    replanSession: "从这里重新规划",
+    replanning: "正在重新生成计划…"
   }
 };
 
@@ -332,6 +359,30 @@ function nextScheduledLabel(steps: Schedulable[]) {
   return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+function playBannedSiteSound() {
+  try {
+    const ctx = new AudioContext();
+    const beep = (freq: number, startAt: number) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0.22, startAt);
+      gain.gain.exponentialRampToValueAtTime(0.001, startAt + 0.15);
+      osc.start(startAt);
+      osc.stop(startAt + 0.15);
+    };
+    beep(660, ctx.currentTime);
+    beep(880, ctx.currentTime + 0.2);
+    beep(1100, ctx.currentTime + 0.4);
+    setTimeout(() => ctx.close(), 700);
+  } catch {
+    // AudioContext unavailable
+  }
+}
+
 function App() {
   const [snapshot, setSnapshot] = useSnapshot();
   const [view, setView] = useState<View>(() => {
@@ -339,13 +390,22 @@ function App() {
     return route === "plan" || route === "log" || route === "history" || route === "settings" ? route : "start";
   });
   const isOverlay = location.hash.startsWith("#/overlay");
+  const isBlocker = location.hash.startsWith("#/blocker");
 
   if (!snapshot) return <div className="loading">Nerve</div>;
+  if (isBlocker) return <BlockerScreen snapshot={snapshot} />;
   if (isOverlay) return <Overlay snapshot={snapshot} setSnapshot={setSnapshot} />;
   const t = useCopy(snapshot.settings.language);
 
   const sessionOpen = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
   const showHandoff = sessionOpen && view === "start";
+
+  // Reset to start screen when a session closes so stale plan/log data doesn't persist
+  useEffect(() => {
+    if (!sessionOpen && (view === "plan" || view === "log")) {
+      setView("start");
+    }
+  }, [sessionOpen]);
 
   return (
     <main className="app-shell">
@@ -630,6 +690,37 @@ function SessionStart({
   );
 }
 
+function BlockerScreen({ snapshot }: { snapshot: AppSnapshot }) {
+  const alert = snapshot.bannedSiteAlert;
+  const step = snapshot.activeStep;
+  const strikes = snapshot.bannedSiteStrikeCount;
+  useEffect(() => {
+    if (!alert) {
+      void window.nerve.dismissBlocker();
+    }
+  }, [alert]);
+  return (
+    <div className="blocker-screen">
+      <div className="blocker-card">
+        <div className="blocker-icon">✖</div>
+        <h1 className="blocker-title">Leave this site.</h1>
+        <p className="blocker-site">{alert?.rule ?? "Banned site"}</p>
+        {strikes > 1 && <span className="blocker-strike">Strike #{strikes}</span>}
+        {step && (
+          <div className="blocker-task">
+            <p className="blocker-task-label">Your current task:</p>
+            <strong>{step.title}</strong>
+            <p>{step.nextAction}</p>
+          </div>
+        )}
+        <button className="blocker-dismiss" onClick={() => window.nerve.dismissBlocker()}>
+          I'll leave the site, let me back in
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const expanded = snapshot.overlayExpanded || Boolean(snapshot.bannedSiteAlert);
   const opacity = snapshot.settings.panelOpacity;
@@ -638,7 +729,20 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
   const t = useCopy(snapshot.settings.language);
   const latestState = snapshot.observations[0]?.userState;
   const [sideView, setSideView] = useState<"step" | "timetable">("step");
+  const [confirmEnd, setConfirmEnd] = useState(false);
   useNow(snapshot.delayUntil || snapshot.thinkingPauseUntil ? 1000 : 30_000);
+  const prevAlertRef = useRef<typeof snapshot.bannedSiteAlert>(null);
+  useEffect(() => {
+    if (snapshot.settings.soundEnabled && snapshot.bannedSiteAlert && !prevAlertRef.current) {
+      playBannedSiteSound();
+    }
+    prevAlertRef.current = snapshot.bannedSiteAlert;
+  }, [snapshot.bannedSiteAlert, snapshot.settings.soundEnabled]);
+  // Reset timetable view when session ends so stale step data doesn't persist
+  useEffect(() => {
+    const open = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
+    if (!open) { setSideView("step"); setConfirmEnd(false); }
+  }, [snapshot.session?.status]);
   return (
     <div className={`overlay ${expanded ? "expanded" : "slim"} ${snapshot.bannedSiteAlert ? "banned-active" : ""}`} style={{ opacity }}>
       {!expanded ? (
@@ -677,30 +781,44 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
               <Clock size={14} /> Time
             </button>
           </div>
-          {sideView === "step" ? (
-            <>
-              {snapshot.bannedSiteAlert ? <BannedSiteCard snapshot={snapshot} /> : <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />}
-              {snapshot.delayUntil && (
-                <div className="timer">
-                  <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
-                </div>
-              )}
-              {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
-                <div className="timer quiet">
-                  <Pause size={15} /> {t("stateThinking")} {timeLeft(snapshot.thinkingPauseUntil)}
-                </div>
-              )}
-              <BreadcrumbTrail compact breadcrumbs={snapshot.breadcrumbs.slice(0, 4).reverse()} />
-            </>
-          ) : (
-            <SideTimetable snapshot={snapshot} />
-          )}
+          <div className="overlay-scroll-area">
+            {sideView === "step" ? (
+              <>
+                {snapshot.bannedSiteAlert ? <BannedSiteCard snapshot={snapshot} /> : <StepCard snapshot={snapshot} setSnapshot={setSnapshot} compact />}
+                {snapshot.delayUntil && (
+                  <div className="timer">
+                    <Clock size={15} /> {timeLeft(snapshot.delayUntil)}
+                  </div>
+                )}
+                {snapshot.thinkingPauseUntil && Date.parse(snapshot.thinkingPauseUntil) > Date.now() && (
+                  <div className="timer quiet">
+                    <Pause size={15} /> {t("stateThinking")} {timeLeft(snapshot.thinkingPauseUntil)}
+                  </div>
+                )}
+              </>
+            ) : (
+              <SideTimetable snapshot={snapshot} />
+            )}
+          </div>
           <div className="overlay-links">
             {snapshot.session?.status === "active" && <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>{t("pauseSession")}</button>}
             {snapshot.session?.status === "paused" && <button onClick={async () => setSnapshot(await window.nerve.resumeSession())}>{t("resumeSession")}</button>}
             <button onClick={() => window.nerve.openMain("/plan")}>{t("viewPlan")}</button>
             <button onClick={() => window.nerve.openMain("/log")}>{t("viewLog")}</button>
             <button onClick={() => window.nerve.openMain("/settings")}>{t("settings")}</button>
+            {snapshot.session && snapshot.session.status !== "completed" && (
+              confirmEnd ? (
+                <div className="overlay-confirm-end">
+                  <p>{t("endSessionConfirm")}</p>
+                  <div className="overlay-confirm-btns">
+                    <button className="danger-sm" onClick={async () => { setConfirmEnd(false); setSnapshot(await window.nerve.endSession()); }}>{t("endSessionConfirmYes")}</button>
+                    <button onClick={() => setConfirmEnd(false)}>{t("endSessionConfirmNo")}</button>
+                  </div>
+                </div>
+              ) : (
+                <button className="danger-sm" onClick={() => setConfirmEnd(true)}>{t("endSession")}</button>
+              )
+            )}
           </div>
         </div>
       )}
@@ -710,12 +828,17 @@ function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot
 
 function BannedSiteCard({ snapshot }: { snapshot: AppSnapshot }) {
   const alert = snapshot.bannedSiteAlert;
+  const strikes = snapshot.bannedSiteStrikeCount;
   const t = useCopy(snapshot.settings.language);
+  const bodyText = strikes >= 3 ? t("bannedSiteBody3") : strikes === 2 ? t("bannedSiteBody2") : t("bannedSiteBody");
   return (
     <section className="banned-card">
-      <p className="eyebrow">{alert?.rule || t("bannedSites")}</p>
+      <div className="banned-card-head">
+        <p className="eyebrow">{alert?.rule || t("bannedSites")}</p>
+        {strikes > 1 && <span className="strike-badge">#{strikes}</span>}
+      </div>
       <h2>{t("bannedSiteTitle")}</h2>
-      <p>{t("bannedSiteBody")}</p>
+      <p>{bodyText}</p>
       {snapshot.activeStep && (
         <div className="return-task">
           <span>{t("bannedSiteAction")}</span>
@@ -853,8 +976,18 @@ function StepCard({
 function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const session = snapshot.session;
   const { completed, percent, total } = completionStats(snapshot.steps);
+  const [replanning, setReplanning] = useState(false);
+  const t = useCopy(snapshot.settings.language);
   async function patch(step: StepRecord, patchValue: Partial<StepRecord>) {
     setSnapshot(await window.nerve.updateStep(step.id, patchValue));
+  }
+  async function replan() {
+    setReplanning(true);
+    try {
+      setSnapshot(await window.nerve.replanSession());
+    } finally {
+      setReplanning(false);
+    }
   }
   if (!session) return <SessionStart setSnapshot={setSnapshot} settings={snapshot.settings} />;
   return (
@@ -869,9 +1002,14 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
             <span className="eyebrow">Plan</span>
             <h2>Editable plan</h2>
           </div>
-          <button onClick={async () => setSnapshot(await window.nerve.addStep(session.id))}>
-            <Plus size={16} /> Add step
-          </button>
+          <div className="section-head-actions">
+            <button onClick={replan} disabled={replanning}>
+              <RefreshCw size={16} /> {replanning ? t("replanning") : t("replanSession")}
+            </button>
+            <button onClick={async () => setSnapshot(await window.nerve.addStep(session.id))}>
+              <Plus size={16} /> Add step
+            </button>
+          </div>
         </div>
         <div className="plan-summary">
           <div>
@@ -893,8 +1031,6 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
             <div className="step-fields">
               <input defaultValue={step.title} onBlur={(event) => patch(step, { title: event.currentTarget.value })} />
               <textarea defaultValue={step.nextAction} onBlur={(event) => patch(step, { nextAction: event.currentTarget.value })} />
-              <input defaultValue={step.explanation} onBlur={(event) => patch(step, { explanation: event.currentTarget.value })} />
-              <input placeholder="Deadline text" defaultValue={step.deadlineText} onBlur={(event) => patch(step, { deadlineText: event.currentTarget.value })} />
               <div className="deadline-fields">
                 <label>
                   Remind
@@ -905,11 +1041,6 @@ function PlanEditor({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnaps
                   <input type="datetime-local" defaultValue={toDateTimeLocal(step.dueAt)} onBlur={(event) => patch(step, { dueAt: fromDateTimeLocal(event.currentTarget.value) })} />
                 </label>
               </div>
-              <select value={step.taskType} onChange={(event) => patch(step, { taskType: event.currentTarget.value as TaskType })}>
-                {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
-                  <option key={type} value={type}>{type}</option>
-                ))}
-              </select>
               <span>{step.status}</span>
             </div>
             <div className="step-controls">
@@ -955,39 +1086,219 @@ function BreadcrumbTrail({ breadcrumbs, compact = false }: { breadcrumbs: AppSna
   );
 }
 
+// ─── Log helpers ────────────────────────────────────────────────────────────
+
+const SKIP_EVENTS = new Set([
+  "screenshot_captured", "app_window_changed", "ai_observation", "capture_error"
+]);
+
+function getMeta(event: EventRecord): Record<string, unknown> {
+  try { return JSON.parse(event.metadataJson) || {}; } catch { return {}; }
+}
+
+type TlEventClass = "tl-start" | "tl-end" | "tl-done" | "tl-warn" | "tl-error" | "tl-nudge" | "tl-pause" | "tl-info";
+
+function eventClass(type: string): TlEventClass {
+  if (["session_started", "session_resumed"].includes(type)) return "tl-start";
+  if (["session_ended", "session_completed"].includes(type)) return "tl-end";
+  if (["session_paused", "thinking_clicked"].includes(type)) return "tl-pause";
+  if (["step_done", "guidance_done"].includes(type)) return "tl-done";
+  if (["banned_site_detected", "deadline_reminder_triggered"].includes(type)) return "tl-warn";
+  if (type === "provider_error") return "tl-error";
+  if (type === "step_shown") return "tl-nudge";
+  return "tl-info";
+}
+
+function eventLabel(type: string, meta: Record<string, unknown>, stepMap: Map<string, string>): string {
+  switch (type) {
+    case "session_started": return "Session started";
+    case "session_ended": return "Session ended";
+    case "session_paused": return "Session paused";
+    case "session_resumed": return "Session resumed";
+    case "session_completed": return "All steps completed";
+    case "step_done": {
+      const title = meta.stepId ? stepMap.get(meta.stepId as string) : null;
+      return title ? `Completed: ${title}` : "Step completed";
+    }
+    case "guidance_done": return "Sub-step done";
+    case "step_atomized": return "Step broken into smaller actions";
+    case "step_added": return "Step added to plan";
+    case "step_deleted": return meta.title ? `Removed: ${meta.title as string}` : "Step removed";
+    case "banned_site_detected": return `Flagged: ${meta.rule || "banned site"}`;
+    case "step_shown": return "Nudge sent";
+    case "thinking_clicked": return "Thinking pause";
+    case "delay_expired": return "5-minute delay ended";
+    case "replan": return "Plan regenerated";
+    case "deadline_reminder_triggered": return `Deadline reminder: ${meta.title || ""}`;
+    case "provider_error": return "AI analysis failed";
+    default: return type.replaceAll("_", " ");
+  }
+}
+
+function eventDetail(type: string, event: EventRecord): string | null {
+  if (type === "step_shown") return event.message;
+  if (type === "provider_error") return event.message;
+  if (type === "session_started") return null;
+  return null;
+}
+
+type TlItem =
+  | { kind: "event"; at: string; event: EventRecord }
+  | { kind: "crumb"; at: string; crumb: BreadcrumbRecord };
+
+function buildTimeline(events: EventRecord[], breadcrumbs: BreadcrumbRecord[]): TlItem[] {
+  const items: TlItem[] = [];
+  for (const event of events) {
+    if (!SKIP_EVENTS.has(event.type)) items.push({ kind: "event", at: event.createdAt, event });
+  }
+  for (const crumb of breadcrumbs) {
+    if ((crumb.durationSeconds ?? 0) >= 30) items.push({ kind: "crumb", at: crumb.startedAt, crumb });
+  }
+  return items.sort((a, b) => a.at.localeCompare(b.at));
+}
+
+function computeLogStats(
+  events: EventRecord[],
+  breadcrumbs: BreadcrumbRecord[],
+  steps: StepRecord[],
+  sessionStart: string,
+  sessionEnd?: string | null
+) {
+  const durationSec = sessionEnd
+    ? Math.round((Date.parse(sessionEnd) - Date.parse(sessionStart)) / 1000)
+    : Math.round((Date.now() - Date.parse(sessionStart)) / 1000);
+  const totalSteps = steps.length;
+  const doneSteps = steps.filter((s) => s.status === "complete").length;
+  const relevantSec = breadcrumbs.filter((b) => b.relevance === "productive").reduce((n, b) => n + (b.durationSeconds ?? 0), 0);
+  const totalBreadcrumbSec = breadcrumbs.reduce((n, b) => n + (b.durationSeconds ?? 0), 0);
+  const focusPct = totalBreadcrumbSec > 30 ? Math.round((relevantSec / totalBreadcrumbSec) * 100) : null;
+  const driftCount = events.filter((e) => e.type === "banned_site_detected").length;
+  const nudgeCount = events.filter((e) => e.type === "step_shown").length;
+  return { durationSec, totalSteps, doneSteps, focusPct, driftCount, nudgeCount };
+}
+
+// ─── LogSummary ─────────────────────────────────────────────────────────────
+
+function LogSummary({ session, events, breadcrumbs, steps }: SessionLogData) {
+  const { durationSec, totalSteps, doneSteps, focusPct, driftCount, nudgeCount } =
+    computeLogStats(events, breadcrumbs, steps, session.startedAt, session.endedAt);
+  const allDone = doneSteps === totalSteps && totalSteps > 0;
+  const statusLabel = session.status === "completed" ? "Completed" : session.status === "paused" ? "Paused" : "In progress";
+
+  return (
+    <div className="log-summary">
+      <div className="log-summary-top">
+        <span className={`task-badge ${session.status}`}>{statusLabel}</span>
+        <p className="log-summary-goal">{session.goal}</p>
+        {session.taskTypes.length > 0 && (
+          <p className="log-summary-types">{session.taskTypes.join(" · ")}</p>
+        )}
+      </div>
+      <div className="log-summary-stats">
+        <span className="stat-chip"><Clock size={11} /> {formatDuration(durationSec)}</span>
+        <span className={`stat-chip ${allDone ? "good" : ""}`}>
+          <Check size={11} /> {doneSteps}/{totalSteps} steps
+        </span>
+        {focusPct !== null && (
+          <span className={`stat-chip ${focusPct >= 70 ? "good" : focusPct >= 40 ? "" : "warn"}`}>
+            <Activity size={11} /> {focusPct}% focus time
+          </span>
+        )}
+        {driftCount > 0 && (
+          <span className="stat-chip warn"><AlertTriangle size={11} /> {driftCount} drift{driftCount !== 1 ? "s" : ""}</span>
+        )}
+        {nudgeCount > 0 && (
+          <span className="stat-chip"><Zap size={11} /> {nudgeCount} nudge{nudgeCount !== 1 ? "s" : ""}</span>
+        )}
+        {session.startedAt && (
+          <span className="stat-chip">
+            <CalendarClock size={11} /> {new Date(session.startedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+          </span>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ─── LogTimeline ─────────────────────────────────────────────────────────────
+
+function LogTimeline({ events, breadcrumbs, steps }: Pick<SessionLogData, "events" | "breadcrumbs" | "steps">) {
+  const stepMap = new Map(steps.map((s) => [s.id, s.title]));
+  const items = buildTimeline(events, breadcrumbs);
+
+  if (items.length === 0) {
+    return <EmptyState icon={<Activity size={18} />} title="No activity yet" body="Actions will appear here as the session progresses." />;
+  }
+
+  return (
+    <div className="tl">
+      {items.map((item, i) => {
+        if (item.kind === "event") {
+          const meta = getMeta(item.event);
+          const cls = eventClass(item.event.type);
+          const label = eventLabel(item.event.type, meta, stepMap);
+          const detail = eventDetail(item.event.type, item.event);
+          return (
+            <div key={item.event.id} className={`tl-item ${cls}`}>
+              <time className="tl-time">{new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+              <div className="tl-dot" />
+              <div className="tl-body">
+                <p className="tl-label">{label}</p>
+                {detail && <p className="tl-detail">{detail}</p>}
+              </div>
+            </div>
+          );
+        } else {
+          const { appName, windowTitle, durationSeconds, relevance } = item.crumb;
+          const title = windowTitle && windowTitle !== appName ? windowTitle : null;
+          return (
+            <div key={`${item.crumb.id}-${i}`} className={`tl-item tl-crumb tl-crumb-${relevance}`}>
+              <time className="tl-time">{new Date(item.at).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</time>
+              <div className="tl-dot" />
+              <div className="tl-body">
+                <p className="tl-label">
+                  <Monitor size={11} className="tl-crumb-icon" />
+                  {appName}{title ? <span className="tl-crumb-title"> · {title}</span> : null}
+                  {durationSeconds ? <span className="tl-crumb-dur">{formatDuration(durationSeconds)}</span> : null}
+                </p>
+              </div>
+            </div>
+          );
+        }
+      })}
+    </div>
+  );
+}
+
+// ─── SessionLog (current session) ────────────────────────────────────────────
+
 function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
+  if (!snapshot.session) {
+    return (
+      <section className="log-layout">
+        <div className="events">
+          <EmptyState icon={<Activity size={18} />} title="No active session" body="Start a session to see the log." />
+        </div>
+      </section>
+    );
+  }
+
+  const logData: SessionLogData = {
+    session: snapshot.session,
+    events: snapshot.events,
+    breadcrumbs: snapshot.breadcrumbs,
+    steps: snapshot.steps,
+  };
+
   return (
     <section className="log-layout">
       <div className="events">
         <div className="page-title compact">
-          <span className="eyebrow">Telemetry</span>
+          <span className="eyebrow">Live</span>
           <h2>Session log</h2>
         </div>
-        {snapshot.taskHistory.length > 0 && (
-          <div className="task-history">
-            <h3>Task history</h3>
-            {snapshot.taskHistory.slice(0, 12).map((entry) => (
-              <article key={entry.id}>
-                <strong>{entry.taskType}</strong>
-                <span>{entry.source.replaceAll("_", " ")} · {entry.confidence}</span>
-                <p>{entry.summary}</p>
-              </article>
-            ))}
-          </div>
-        )}
-        {snapshot.events.length === 0 ? (
-          <EmptyState icon={<Activity size={18} />} title="No events yet" body={snapshot.session ? "The session is open." : "Start a session first."} />
-        ) : (
-          snapshot.events.map((event) => (
-            <article className="event-row" key={event.id}>
-              <time>{new Date(event.createdAt).toLocaleTimeString()}</time>
-              <div>
-                <strong>{event.type.replaceAll("_", " ")}</strong>
-                <p>{event.message}</p>
-              </div>
-            </article>
-          ))
-        )}
+        <LogSummary {...logData} />
+        <LogTimeline events={snapshot.events} breadcrumbs={snapshot.breadcrumbs} steps={snapshot.steps} />
       </div>
       <div className="gallery">
         {snapshot.reminders.length > 0 && (
@@ -1006,7 +1317,7 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
         <div className="section-head">
           <div className="page-title compact">
             <span className="eyebrow">Capture</span>
-            <h2>Screenshot gallery</h2>
+            <h2>Screenshots</h2>
           </div>
           <span className="count-pill">{snapshot.screenshots.length}</span>
         </div>
@@ -1021,7 +1332,7 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
                   <strong>{new Date(shot.capturedAt).toLocaleTimeString()}</strong>
                   <span>{shot.activeApp}</span>
                   <span>{shot.windowTitle}</span>
-                  <span>{shot.aiState || "unknown"}</span>
+                  <span>{shot.aiState || "—"}</span>
                 </figcaption>
               </figure>
             ))}
@@ -1031,6 +1342,8 @@ function SessionLog({ snapshot }: { snapshot: AppSnapshot }) {
     </section>
   );
 }
+
+// ─── EmptyState ──────────────────────────────────────────────────────────────
 
 function EmptyState({ icon, title, body }: { icon: ReactNode; title: string; body: string }) {
   return (
@@ -1050,11 +1363,36 @@ function formatDuration(seconds: number) {
   return `${minutes}m`;
 }
 
+// ─── SessionHistory ───────────────────────────────────────────────────────────
+
 function SessionHistory() {
   const [sessions, setSessions] = useState<SessionSummaryRecord[]>([]);
+  const [detail, setDetail] = useState<SessionLogData | null>(null);
+  const [loading, setLoading] = useState(false);
+
   useEffect(() => {
     window.nerve.getSessions().then(setSessions);
   }, []);
+
+  async function openDetail(sessionId: string) {
+    setLoading(true);
+    const data = await window.nerve.getSessionLog(sessionId);
+    setDetail(data);
+    setLoading(false);
+  }
+
+  if (detail) {
+    return (
+      <section className="history-layout">
+        <button className="history-back" onClick={() => setDetail(null)}>
+          <ChevronLeft size={15} /> Back to history
+        </button>
+        <LogSummary {...detail} />
+        <LogTimeline events={detail.events} breadcrumbs={detail.breadcrumbs} steps={detail.steps} />
+      </section>
+    );
+  }
+
   return (
     <section className="history-layout">
       <div className="section-head">
@@ -1062,33 +1400,45 @@ function SessionHistory() {
           <span className="eyebrow">Archive</span>
           <h2>Session history</h2>
         </div>
-        <button onClick={() => window.nerve.getSessions().then(setSessions)}>
+        <button onClick={() => window.nerve.getSessions().then(setSessions)} disabled={loading}>
           <RefreshCw size={16} /> Refresh
         </button>
       </div>
       {sessions.length === 0 ? (
-        <p className="notice">No saved sessions yet.</p>
+        <EmptyState icon={<Clock size={18} />} title="No sessions yet" body="Completed sessions will appear here." />
       ) : (
         <div className="history-list">
-          {sessions.map((session) => (
-            <article className={`history-card ${session.status}`} key={session.id}>
-              <div>
-                <span className="task-badge">{session.status}</span>
-                <h3>{session.goal}</h3>
-                <p className="muted">{session.taskTypes.join(" + ")}</p>
-              </div>
-              <div className="history-metrics">
-                <span><strong>{Math.round(session.completionRate * 100)}%</strong> complete</span>
-                <span><strong>{session.completedStepCount}/{session.stepCount}</strong> activities</span>
-                <span><strong>{formatDuration(session.durationSeconds)}</strong> spent</span>
-                <span><strong>{session.driftCount}</strong> drift notes</span>
-              </div>
-              <p className="subtle">
-                Started {new Date(session.startedAt).toLocaleString()}
-                {session.endedAt ? ` · Ended ${new Date(session.endedAt).toLocaleString()}` : ""}
-              </p>
-            </article>
-          ))}
+          {sessions.map((session) => {
+            const allDone = session.completedStepCount === session.stepCount && session.stepCount > 0;
+            return (
+              <article
+                className={`history-card ${session.status} history-card-clickable`}
+                key={session.id}
+                onClick={() => openDetail(session.id)}
+              >
+                <div className="history-card-top">
+                  <span className={`task-badge ${session.status}`}>{session.status}</span>
+                  <h3>{session.goal}</h3>
+                  <p className="muted">{session.taskTypes.join(" · ")}</p>
+                </div>
+                <div className="history-metrics">
+                  <span><strong>{formatDuration(session.durationSeconds)}</strong> spent</span>
+                  <span className={allDone ? "metric-good" : ""}>
+                    <strong>{session.completedStepCount}/{session.stepCount}</strong> steps done
+                  </span>
+                  <span><strong>{Math.round(session.completionRate * 100)}%</strong> complete</span>
+                  {session.driftCount > 0 && (
+                    <span className="metric-warn"><strong>{session.driftCount}</strong> drift{session.driftCount !== 1 ? "s" : ""}</span>
+                  )}
+                </div>
+                <p className="subtle">
+                  {new Date(session.startedAt).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" })}
+                  {session.endedAt ? ` → ${new Date(session.endedAt).toLocaleString([], { hour: "2-digit", minute: "2-digit" })}` : " · ongoing"}
+                  <span className="history-card-hint">View log →</span>
+                </p>
+              </article>
+            );
+          })}
         </div>
       )}
     </section>
@@ -1156,6 +1506,14 @@ function SettingsScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
               type="checkbox"
               checked={settings.bannedSitesEnabled}
               onChange={(event) => save({ bannedSitesEnabled: event.target.checked })}
+            />
+          </label>
+          <label className="switch-row">
+            <span>{t("soundEnabled")}</span>
+            <input
+              type="checkbox"
+              checked={settings.soundEnabled}
+              onChange={(event) => save({ soundEnabled: event.target.checked })}
             />
           </label>
           <label className="wide-field">

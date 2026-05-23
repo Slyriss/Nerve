@@ -1,4 +1,6 @@
-import { app, BrowserWindow, desktopCapturer, globalShortcut, ipcMain, net, Notification, protocol, safeStorage, screen, shell } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, net, Notification, protocol, safeStorage, screen, shell } from "electron";
+import { CaptureService, getActiveWindowFallback, isNoisyDetection, type ScreenCapture } from "./capture.js";
+import { AnalysisService } from "./analysis.js";
 import Database from "better-sqlite3";
 import { drizzle, type BetterSQLite3Database } from "drizzle-orm/better-sqlite3";
 import path from "node:path";
@@ -51,18 +53,19 @@ protocol.registerSchemesAsPrivileged([
 
 let overlayWindow: BrowserWindow | null = null;
 let mainWindow: BrowserWindow | null = null;
+let blockerWindow: BrowserWindow | null = null;
 let db: Database.Database;
 let orm: BetterSQLite3Database<typeof schema>;
-let captureTimer: NodeJS.Timeout | null = null;
+let captureService: CaptureService | null = null;
 let delayTimer: NodeJS.Timeout | null = null;
 let reminderTimer: NodeJS.Timeout | null = null;
 let activeSessionId: string | null = null;
-let previousHash: string | null = null;
 let overlayExpanded = false;
 let overlaySuppressUntil = 0;
 let delayUntil: string | null = null;
 let thinkingPauseUntil: string | null = null;
 let bannedSiteAlert: BannedSiteAlert | null = null;
+let bannedSiteStrikeCount = 0;
 let lastBannedSiteEventKey: string | null = null;
 let lastBannedSiteEventAt = 0;
 let currentBreadcrumbId: string | null = null;
@@ -680,6 +683,7 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
     normalized.bannedSitesEnabled = patch.bannedSitesEnabled;
     if (!patch.bannedSitesEnabled) {
       bannedSiteAlert = null;
+      hideBlockerWindow();
       lastBannedSiteEventKey = null;
     }
   }
@@ -689,6 +693,9 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
       .map((site) => site.replace(/^https?:\/\//, "").replace(/^www\./, "").replace(/\/.*$/, ""))
       .filter((site, index, sites) => site.length > 2 && /^[a-z0-9.*-]+(?:\.[a-z0-9-]+)+$/.test(site) && sites.indexOf(site) === index)
       .slice(0, 80);
+  }
+  if (typeof patch.soundEnabled === "boolean") {
+    normalized.soundEnabled = patch.soundEnabled;
   }
   return normalized;
 }
@@ -723,6 +730,15 @@ function getCurrentActiveSession(): SessionRecord | null {
 
 function isCurrentSessionActive(sessionId: string) {
   return getCurrentActiveSession()?.id === sessionId;
+}
+
+function getSessionLog(sessionId: string): import("@nerve/shared").SessionLogData | null {
+  const sessionRow = db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId) as any;
+  if (!sessionRow) return null;
+  const events = (db.prepare("SELECT * FROM events WHERE session_id = ? ORDER BY created_at ASC").all(sessionId) as any[]).map(rowEvent);
+  const breadcrumbs = (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at ASC").all(sessionId) as any[]).map(rowBreadcrumb);
+  const steps = (db.prepare("SELECT * FROM activities WHERE session_id = ? ORDER BY order_index ASC").all(sessionId) as any[]).map(rowStep);
+  return { session: rowSession(sessionRow), events, breadcrumbs, steps };
 }
 
 function getSessionSummaries(limit = 60): SessionSummaryRecord[] {
@@ -965,34 +981,7 @@ function provider(settings = getSettings()): AIProvider {
   return new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
 }
 
-let activeWinFn: (() => Promise<any>) | null = null;
-
-async function getActiveWindowFallback(sourceName = "Unknown screen") {
-  try {
-    if (!activeWinFn) {
-      const mod = await import("active-win");
-      const m = mod as unknown as { default?: () => Promise<any>; activeWindow?: () => Promise<any> };
-      activeWinFn = m.default ?? m.activeWindow ?? null;
-    }
-    const active = activeWinFn ? await activeWinFn() : null;
-    const rawUrl = typeof active?.url === "string" ? active.url : "";
-    const rawTitle = typeof active?.title === "string" ? active.title : sourceName;
-    return {
-      activeApp: sanitizeTitle(active?.owner?.name || "Unknown app"),
-      windowTitle: sanitizeTitle(rawTitle),
-      matchText: `${active?.owner?.name || ""} ${rawTitle} ${rawUrl}`
-    };
-  } catch {
-    return { activeApp: "Unknown app", windowTitle: sanitizeTitle(sourceName), matchText: sourceName };
-  }
-}
-
-function sanitizeTitle(title: string): string {
-  return title
-    .replace(/https?:\/\/\S+/gi, "[url]")
-    .replace(/\b[a-z0-9.-]+\.[a-z]{2,}(\/\S*)?/gi, "[site]")
-    .slice(0, 180);
-}
+const analysisService = new AnalysisService(() => provider());
 
 function classifyRelevance(appName: string, windowTitle: string): BreadcrumbRelevance {
   const text = `${appName} ${windowTitle}`;
@@ -1005,11 +994,6 @@ function classifyRelevance(appName: string, windowTitle: string): BreadcrumbRele
   }
   if (/discord|youtube|tiktok|instagram|reddit|netflix|steam|game/i.test(text)) return "unproductive";
   return "unknown";
-}
-
-function isNoisyDetection(appName: string, windowTitle: string) {
-  const text = `${appName} ${windowTitle}`;
-  return /electron.*nerve|^nerve\b|snipping tool|entire screen/i.test(text);
 }
 
 function normalizeBannedRule(rule: string) {
@@ -1025,6 +1009,14 @@ function bannedSiteMatch(settings: NerveSettings, context: { activeApp: string; 
     const escaped = rule.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/^\\\*\\\./, "(?:[a-z0-9-]+\\.)*");
     const pattern = new RegExp(`(^|[^a-z0-9-])${escaped}([^a-z0-9-]|$)`, "i");
     if (pattern.test(haystack)) return rule;
+    // Also match the base hostname without TLD (e.g. "youtube" from "youtube.com")
+    // so browsers that show "YouTube - Chrome" rather than "youtube.com" are caught.
+    const baseDomain = rule.replace(/\.[a-z]{2,}$/, "");
+    if (baseDomain && baseDomain !== rule && baseDomain.length > 2) {
+      const baseEscaped = baseDomain.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+      const basePattern = new RegExp(`(^|[^a-z0-9-])${baseEscaped}([^a-z0-9-]|$)`, "i");
+      if (basePattern.test(haystack)) return rule;
+    }
   }
   return null;
 }
@@ -1033,6 +1025,7 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
   const rule = bannedSiteMatch(settings, context);
   if (!rule) {
     bannedSiteAlert = null;
+    hideBlockerWindow();
     return false;
   }
   const timestamp = now();
@@ -1044,10 +1037,12 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
   };
   overlayExpanded = true;
   overlaySuppressUntil = 0;
+  showBlockerWindow();
   const eventKey = `${sessionId}|${rule}|${context.activeApp}|${context.windowTitle}`;
   if (eventKey !== lastBannedSiteEventKey || Date.now() - lastBannedSiteEventAt > 60_000) {
     lastBannedSiteEventKey = eventKey;
     lastBannedSiteEventAt = Date.now();
+    bannedSiteStrikeCount++;
     addEvent(sessionId, "banned_site_detected", `Banned site detected: ${rule}. Leave this site and return to your task.`, {
       rule,
       activeApp: context.activeApp,
@@ -1122,54 +1117,36 @@ function finishCurrentBreadcrumb() {
   currentBreadcrumbStartedAt = null;
 }
 
-async function capturePrimaryScreen() {
-  const display = screen.getPrimaryDisplay();
-  const sources = await desktopCapturer.getSources({
-    types: ["screen"],
-    thumbnailSize: { width: display.size.width, height: display.size.height }
-  });
-  const source = sources[0];
-  if (!source) throw new Error("No screen source available.");
-  return { image: source.thumbnail, sourceName: source.name };
-}
-
-function imageHash(image: Electron.NativeImage): string {
-  const small = image.resize({ width: 8, height: 8, quality: "good" });
-  const bitmap = small.toBitmap();
-  const values: number[] = [];
-  for (let i = 0; i < bitmap.length; i += 4) {
-    values.push((bitmap[i] + bitmap[i + 1] + bitmap[i + 2]) / 3);
-  }
-  const avg = values.reduce((sum, value) => sum + value, 0) / Math.max(1, values.length);
-  return values.map((value) => (value >= avg ? "1" : "0")).join("");
-}
-
 function recentBreadcrumbs(sessionId: string): BreadcrumbRecord[] {
   return (db.prepare("SELECT * FROM breadcrumbs WHERE session_id = ? ORDER BY started_at DESC LIMIT 6").all(sessionId) as any[])
     .map(rowBreadcrumb)
     .reverse();
 }
 
-async function analyzeTick() {
-  const session = getCurrentActiveSession();
+/**
+ * Called by CaptureService on every "frame" event.
+ * Receives a fully-formed ScreenCapture (image, hash, app context, idle time)
+ * and runs AI analysis + DB writes + broadcast for the active session.
+ */
+async function handleCapture(capture: ScreenCapture, sessionId: string) {
+  if (!isCurrentSessionActive(sessionId)) return;
+  const session = getSessionById(sessionId);
   if (!session) return;
-  activeSessionId = session.id;
   const activeStep = getActiveStep(session.id);
   if (!activeStep) return;
 
   try {
     const settings = getSettings();
-    const { image, sourceName } = await capturePrimaryScreen();
-    const detectedContext = await getActiveWindowFallback(sourceName);
-    if (!isCurrentSessionActive(session.id)) return;
-    const usefulContext = isNoisyDetection(detectedContext.activeApp, detectedContext.windowTitle)
-      ? lastUsefulContext(session.id) ?? detectedContext
-      : detectedContext;
-    const { activeApp, windowTitle } = usefulContext;
+
+    // If the captured window is Nerve itself or another noisy source, fall back to the
+    // last meaningful context we recorded so the AI always sees real user activity.
+    const contextSource = capture.noisy
+      ? (lastUsefulContext(session.id) ?? { activeApp: capture.activeApp, windowTitle: capture.windowTitle })
+      : { activeApp: capture.activeApp, windowTitle: capture.windowTitle };
+    const { activeApp, windowTitle } = contextSource;
+    const matchText = capture.noisy ? undefined : capture.matchText;
+
     updateBreadcrumb(session.id, activeApp, windowTitle);
-    const hash = imageHash(image);
-    const changed = previousHash === null ? true : previousHash !== hash;
-    previousHash = hash;
 
     const capturedAt = now();
     let screenshotId: string | null = null;
@@ -1177,23 +1154,15 @@ async function analyzeTick() {
       screenshotId = id();
       const fullPath = path.join(screenshotDir(), `${capturedAt.replace(/[:.]/g, "-")}-${screenshotId}.jpg`);
       const thumbPath = path.join(screenshotDir(), `${capturedAt.replace(/[:.]/g, "-")}-${screenshotId}-thumb.jpg`);
-      fs.writeFileSync(fullPath, image.toJPEG(85));
-      fs.writeFileSync(thumbPath, image.resize({ width: 320, height: 180, quality: "good" }).toJPEG(75));
+      fs.writeFileSync(fullPath, capture.image.toJPEG(85));
+      fs.writeFileSync(thumbPath, capture.image.resize({ width: 320, height: 180, quality: "good" }).toJPEG(75));
       db.prepare("INSERT INTO screenshots (id, session_id, file_path, thumbnail_path, captured_at, active_app, window_title, perceptual_hash, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)").run(
-        screenshotId,
-        session.id,
-        fullPath,
-        thumbPath,
-        capturedAt,
-        activeApp,
-        windowTitle,
-        hash,
-        capturedAt
+        screenshotId, session.id, fullPath, thumbPath, capturedAt, activeApp, windowTitle, capture.hash, capturedAt
       );
       addEvent(session.id, "screenshot_captured", "Screenshot captured and stored locally.", { screenshotId });
     }
 
-    if (handleBannedSiteDetection(session.id, settings, usefulContext)) {
+    if (handleBannedSiteDetection(session.id, settings, { activeApp, windowTitle, matchText })) {
       broadcast();
       return;
     }
@@ -1221,16 +1190,16 @@ async function analyzeTick() {
       windowTitle,
       elapsedOnCurrentStepSeconds: elapsedOnStep,
       elapsedInCurrentAppSeconds: elapsedInApp,
-      screenshotChangedSinceLastCapture: changed,
+      screenshotChangedSinceLastCapture: capture.changed,
       recentBreadcrumbs: recentBreadcrumbs(session.id),
       delayCount: activeStep.delayCount,
       atomizationLevel: activeStep.atomizationLevel,
       thinkingPauseActive: thinkingActive
     };
-    let selectedProvider = provider(settings);
+
     let observation;
     try {
-      observation = await selectedProvider.analyzeScreen(analyzeInput);
+      observation = await analysisService.analyzeScreen(analyzeInput);
     } catch (error) {
       if (!isCurrentSessionActive(session.id)) return;
       addEvent(session.id, "provider_error", "DeepSeek analysis failed. Check the API key, model, or network connection.", { error: String(error) });
@@ -1239,6 +1208,7 @@ async function analyzeTick() {
       return;
     }
     if (!isCurrentSessionActive(session.id)) return;
+
     observation = {
       ...observation,
       suggestedNextAction: ensurePhysicalAction(observation.suggestedNextAction, activeStep.nextAction)
@@ -1253,8 +1223,7 @@ async function analyzeTick() {
     );
 
     const stuckReached = observation.userState === "stuck" && elapsedOnStep >= settings.stuckThresholdMinutes * 60 && !thinkingActive;
-    const driftReached =
-      observation.userState === "unproductive_drift" && elapsedInApp >= settings.driftThresholdMinutes * 60 && !thinkingActive;
+    const driftReached = observation.userState === "unproductive_drift" && elapsedInApp >= settings.driftThresholdMinutes * 60 && !thinkingActive;
     if (stuckReached || driftReached || delayExpired || observation.shouldIntervene) {
       const expanded = expandOverlayFromSystem();
       if (delayExpired) delayUntil = null;
@@ -1263,33 +1232,20 @@ async function analyzeTick() {
       }
     }
 
-    const obsId = id();
     db.prepare(`INSERT INTO ai_observations (
       id, session_id, screenshot_id, provider, model, user_state, task_relevance, progress_state, active_app,
       active_context, visible_change_summary, concise_explanation, suggested_next_action, suggested_step_complete,
       should_intervene, intervention_type, urgency, breadcrumb_relevance, detected_task_type, raw_json, created_at
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
-      obsId,
-      session.id,
-      screenshotId,
-      selectedProvider.name,
+      id(), session.id, screenshotId,
+      analysisService.providerName,
       settings.aiProvider === "deepseek" ? settings.deepseekModel : "mock",
-      observation.userState,
-      observation.taskRelevance,
-      observation.progressState,
-      activeApp,
-      observation.activeContext,
-      observation.visibleChangeSummary,
-      observation.conciseExplanation,
-      observation.suggestedNextAction,
-      observation.suggestedStepComplete ? 1 : 0,
-      observation.shouldIntervene ? 1 : 0,
-      observation.interventionType,
-      observation.urgency,
-      observation.breadcrumbRelevance,
-      observation.detectedTaskType ?? null,
-      JSON.stringify(observation),
-      now()
+      observation.userState, observation.taskRelevance, observation.progressState, activeApp,
+      observation.activeContext, observation.visibleChangeSummary, observation.conciseExplanation,
+      observation.suggestedNextAction, observation.suggestedStepComplete ? 1 : 0,
+      observation.shouldIntervene ? 1 : 0, observation.interventionType, observation.urgency,
+      observation.breadcrumbRelevance, observation.detectedTaskType ?? null,
+      JSON.stringify(observation), now()
     );
     addEvent(session.id, "ai_observation", observation.conciseExplanation, { userState: observation.userState });
     broadcast();
@@ -1313,12 +1269,17 @@ function pruneOldScreenshots(keepDays = 30) {
 }
 
 function resetCaptureLoop() {
-  if (captureTimer) clearInterval(captureTimer);
-  captureTimer = null;
+  captureService?.stop();
+  captureService = null;
   const session = getCurrentActiveSession();
   if (!session) return;
   const settings = getSettings();
-  captureTimer = setInterval(() => void analyzeTick(), settings.screenshotIntervalSeconds * 1000);
+  const cs = new CaptureService(settings.screenshotIntervalSeconds * 1000);
+  cs.on("frame", (capture: ScreenCapture) => {
+    void handleCapture(capture, session.id);
+  });
+  cs.start();
+  captureService = cs;
 }
 
 function clearDelayTimer() {
@@ -1333,8 +1294,8 @@ function clearReminderLoop() {
 }
 
 function stopSessionLoops() {
-  if (captureTimer) clearInterval(captureTimer);
-  captureTimer = null;
+  captureService?.stop();
+  captureService = null;
   clearDelayTimer();
   clearReminderLoop();
   finishCurrentBreadcrumb();
@@ -1388,6 +1349,7 @@ function snapshot(): AppSnapshot {
     delayUntil,
     thinkingPauseUntil,
     bannedSiteAlert,
+    bannedSiteStrikeCount,
     screenshotFolder: screenshotDir()
   };
 }
@@ -1397,6 +1359,9 @@ function broadcast() {
   const data = snapshot();
   overlayWindow?.webContents.send("nerve:snapshot", data);
   mainWindow?.webContents.send("nerve:snapshot", data);
+  if (blockerWindow && !blockerWindow.isDestroyed()) {
+    blockerWindow.webContents.send("nerve:snapshot", data);
+  }
 }
 
 function applyOverlayBounds() {
@@ -1457,6 +1422,44 @@ function closeOverlayWindow() {
   }
 }
 
+function showBlockerWindow() {
+  if (blockerWindow && !blockerWindow.isDestroyed()) {
+    blockerWindow.show();
+    blockerWindow.focus();
+    return;
+  }
+  const { bounds } = screen.getPrimaryDisplay();
+  blockerWindow = new BrowserWindow({
+    x: bounds.x,
+    y: bounds.y,
+    width: bounds.width,
+    height: bounds.height,
+    frame: false,
+    transparent: false,
+    alwaysOnTop: true,
+    skipTaskbar: true,
+    resizable: false,
+    focusable: true,
+    webPreferences: {
+      preload: path.join(__dirname, "../preload/preload.cjs"),
+      contextIsolation: true,
+      nodeIntegration: false
+    }
+  });
+  blockerWindow.setAlwaysOnTop(true, "screen-saver");
+  blockerWindow.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
+  blockerWindow.on("closed", () => {
+    blockerWindow = null;
+  });
+  void loadWindow(blockerWindow, "/blocker");
+}
+
+function hideBlockerWindow() {
+  if (blockerWindow && !blockerWindow.isDestroyed()) {
+    blockerWindow.hide();
+  }
+}
+
 function registerGlobalHotkeys() {
   globalShortcut.unregister("Super+Shift+N");
   const registered = globalShortcut.register("Super+Shift+N", toggleOverlayFromHotkey);
@@ -1507,12 +1510,14 @@ function registerIpc() {
     broadcast();
   });
   ipcMain.handle("nerve:openMain", (_event, route = "/") => createMainWindow(route));
+  ipcMain.handle("nerve:dismissBlocker", () => hideBlockerWindow());
   ipcMain.handle("nerve:openScreenshotFolder", () => shell.openPath(screenshotDir()));
   ipcMain.handle("nerve:updateSettings", (_event, patch: Partial<NerveSettings>) => {
     updateSettings(patch);
     return snapshot();
   });
   ipcMain.handle("nerve:getSessions", () => getSessionSummaries());
+  ipcMain.handle("nerve:getSessionLog", (_event, sessionId: string) => getSessionLog(sessionId));
   ipcMain.handle("nerve:parseTaskList", async (_event, input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }) => {
     const goal = typeof input.goal === "string" ? input.goal.trim() : "";
     if (!goal) {
@@ -1521,7 +1526,7 @@ function registerIpc() {
     const requestedScopes = inferTaskScopesFromText(goal, input.taskTypes ?? []);
     const taskType = requestedScopes.length > 1 ? "Mixed work" : requestedScopes[0];
     const activeWindow = await getActiveWindowFallback();
-    const parsed = await provider().generatePlan({
+    const parsed = await analysisService.generatePlan({
       goal,
       taskType,
       taskTypes: requestedScopes,
@@ -1541,11 +1546,12 @@ function registerIpc() {
   ipcMain.handle("nerve:deleteAllData", () => {
     stopSessionLoops();
     activeSessionId = null;
-    previousHash = null;
     overlayExpanded = false;
     overlaySuppressUntil = 0;
     thinkingPauseUntil = null;
     bannedSiteAlert = null;
+    hideBlockerWindow();
+    bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
     cachedSettings = null;
     db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM activities; DELETE FROM guidance_steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history; DELETE FROM reminders;");
@@ -1564,11 +1570,10 @@ function registerIpc() {
     const taskType = taskTypes.length > 1 ? "Mixed work" : taskTypes[0];
     const timestamp = now();
     const sessionId = id();
-    const planProvider = provider();
     const activeWindow = await getActiveWindowFallback();
     const plan = parsedSteps.length
       ? { steps: parsedSteps }
-      : await planProvider.generatePlan({
+      : await analysisService.generatePlan({
           goal,
           taskType,
           taskTypes,
@@ -1618,9 +1623,10 @@ function registerIpc() {
     delayUntil = null;
     thinkingPauseUntil = null;
     bannedSiteAlert = null;
+    hideBlockerWindow();
+    bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
-    previousHash = null;
-    addEvent(sessionId, "session_started", "Session started.", { goal, provider: planProvider.name, taskTypes });
+    addEvent(sessionId, "session_started", "Session started.", { goal, provider: analysisService.providerName, taskTypes });
     for (const scope of taskTypes) {
       addTaskHistory(sessionId, scope, "session_start", "high", `Session scope added: ${scope}`);
     }
@@ -1630,7 +1636,7 @@ function registerIpc() {
     }
     resetCaptureLoop();
     resetReminderLoop();
-    void analyzeTick();
+    captureService?.captureNow();
     broadcast();
     return snapshot();
   });
@@ -1644,6 +1650,8 @@ function registerIpc() {
     stopSessionLoops();
     thinkingPauseUntil = null;
     bannedSiteAlert = null;
+    hideBlockerWindow();
+    bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
     addEvent(session.id, "session_ended", "Session ended by user.");
     broadcast();
@@ -1659,6 +1667,7 @@ function registerIpc() {
     stopSessionLoops();
     thinkingPauseUntil = null;
     bannedSiteAlert = null;
+    hideBlockerWindow();
     lastBannedSiteEventKey = null;
     addEvent(session.id, "session_paused", "Session paused. I’ll hold this exact spot.");
     broadcast();
@@ -1682,7 +1691,7 @@ function registerIpc() {
     addEvent(target.id, "session_resumed", "Session resumed. The next step is still here.");
     resetCaptureLoop();
     resetReminderLoop();
-    void analyzeTick();
+    captureService?.captureNow();
     broadcast();
     return snapshot();
   });
@@ -1697,6 +1706,74 @@ function registerIpc() {
     if (typeof patch.deadlineText === "string") {
       db.prepare("UPDATE sessions SET deadline_text = ?, updated_at = ? WHERE id = ?").run(patch.deadlineText.trim(), timestamp, sessionId);
     }
+    broadcast();
+    return snapshot();
+  });
+
+  ipcMain.handle("nerve:replanSession", async () => {
+    const session = getCurrentSession();
+    if (!session || session.status === "completed") return snapshot();
+    const settings = getSettings();
+    const timestamp = now();
+
+    const completedActivities = db
+      .prepare("SELECT title FROM activities WHERE session_id = ? AND status = 'complete' ORDER BY order_index")
+      .all(session.id) as { title: string }[];
+    const activeActivity = db
+      .prepare("SELECT title FROM activities WHERE session_id = ? AND status = 'active' ORDER BY order_index LIMIT 1")
+      .get(session.id) as { title: string } | undefined;
+
+    let goalWithContext = session.goal;
+    if (completedActivities.length > 0) {
+      goalWithContext += `\n\nAlready completed:\n${completedActivities.map((a) => `- ${a.title}`).join("\n")}`;
+    }
+    if (activeActivity) {
+      goalWithContext += `\n\nCurrently working on: ${activeActivity.title}\n\nGenerate only the remaining steps needed after the current one.`;
+    }
+
+    const plan = await analysisService.generatePlan({
+      goal: goalWithContext,
+      taskType: session.taskType,
+      taskTypes: session.taskTypes,
+      language: settings.language,
+      deadlineText: session.deadlineText,
+      currentDateTime: `${localDateTimeContext()} (${new Date().toISOString()})`,
+      timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
+    });
+
+    const pendingIds = (
+      db.prepare("SELECT id FROM activities WHERE session_id = ? AND status = 'pending'").all(session.id) as { id: string }[]
+    ).map((r) => r.id);
+    for (const activityId of pendingIds) {
+      db.prepare("DELETE FROM guidance_steps WHERE activity_id = ?").run(activityId);
+    }
+    db.prepare("DELETE FROM activities WHERE session_id = ? AND status = 'pending'").run(session.id);
+
+    const maxRow = db
+      .prepare("SELECT MAX(order_index) as m FROM activities WHERE session_id = ?")
+      .get(session.id) as { m: number | null };
+    const nextIdx = (maxRow.m ?? -1) + 1;
+
+    const insertActivity = db.prepare(
+      "INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?, NULL)"
+    );
+    const insertGuidance = db.prepare(
+      "INSERT INTO guidance_steps (id, activity_id, session_id, order_index, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, 0, ?, ?, 'pending', 0, 0, ?, ?, NULL)"
+    );
+
+    plan.steps.forEach((step: PlanStepDraft, index: number) => {
+      const activityId = id();
+      insertActivity.run(activityId, session.id, nextIdx + index, step.title, step.taskType ?? session.taskType, step.deadlineText ?? "", validIso(step.dueAt), validIso(step.reminderAt), timestamp, timestamp);
+      insertGuidance.run(id(), activityId, session.id, step.nextAction, step.explanation, timestamp, timestamp);
+    });
+
+    if (!getActiveStep(session.id)) activateNextPendingStep(session.id);
+    for (const step of getSteps(session.id)) syncStepReminder(step);
+
+    addEvent(session.id, "replan", `Plan regenerated: ${plan.steps.length} new steps added.`, {
+      completedCount: completedActivities.length
+    });
+
     broadcast();
     return snapshot();
   });
@@ -1876,10 +1953,9 @@ function registerIpc() {
     }
 
     if (action === "atomize") {
-      const ai = provider();
       try {
         const guidance = getActiveGuidanceStep(step.id);
-        const smaller = await ai.atomizeStep({
+        const smaller = await analysisService.atomizeStep({
           goal: session.goal,
           taskType: step.taskType,
           sessionTaskTypes: session.taskTypes,

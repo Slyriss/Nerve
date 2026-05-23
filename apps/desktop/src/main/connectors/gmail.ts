@@ -85,7 +85,7 @@ export async function startGmailOAuth(clientId: string, clientSecret = ""): Prom
   authUrl.searchParams.set("client_id", clientId);
   authUrl.searchParams.set("redirect_uri", redirectUri);
   authUrl.searchParams.set("response_type", "code");
-  authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email");
+  authUrl.searchParams.set("scope", "https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/calendar.readonly https://www.googleapis.com/auth/userinfo.email");
   authUrl.searchParams.set("code_challenge", challenge);
   authUrl.searchParams.set("code_challenge_method", "S256");
   authUrl.searchParams.set("access_type", "offline");
@@ -95,6 +95,7 @@ export async function startGmailOAuth(clientId: string, clientSecret = ""): Prom
   // Open browser for user to authorize
   void shell.openExternal(authUrl.toString());
 
+  const OAUTH_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
   const code = await new Promise<string>((resolve, reject) => {
     const server = http.createServer((req, res) => {
       const url = new URL(req.url!, `http://127.0.0.1:${port}`);
@@ -104,20 +105,27 @@ export async function startGmailOAuth(clientId: string, clientSecret = ""): Prom
       res.writeHead(200, { "Content-Type": "text/html" });
       if (code && returnedState === state) {
         res.end("<html><body><h2>Nerve: Gmail connected! You can close this tab.</h2></body></html>");
+        clearTimeout(timer);
         server.close();
         resolve(code);
       } else if (code) {
         res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
+        clearTimeout(timer);
         server.close();
         reject(new Error("OAuth state mismatch"));
       } else {
         res.end("<html><body><h2>Nerve: Authorization failed. Please try again.</h2></body></html>");
+        clearTimeout(timer);
         server.close();
         reject(new Error(error ?? "OAuth cancelled"));
       }
     });
     server.listen(port);
-    server.on("error", reject);
+    server.on("error", (err) => { clearTimeout(timer); reject(err); });
+    const timer = setTimeout(() => {
+      server.close();
+      reject(new Error("Gmail OAuth timed out — no response within 5 minutes. Please try again."));
+    }, OAUTH_TIMEOUT_MS);
   });
 
   const tokenBody = new URLSearchParams({

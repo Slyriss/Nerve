@@ -60,7 +60,7 @@ export type Urgency = "low" | "medium";
 export type BreadcrumbRelevance = "productive" | "unproductive" | "unknown";
 export type DisplayLanguage = "en" | "zh";
 export type ReminderStatus = "scheduled" | "triggered" | "dismissed";
-export type ConnectorName = "gmail";
+export type ConnectorName = "gmail" | "calendar";
 export type ActionItemStatus = "pending" | "promoted" | "dismissed";
 export type ActionItemUrgency = "low" | "medium" | "high";
 
@@ -75,6 +75,7 @@ export interface PlanStepDraft {
   routineIntervalMinutes?: number | null;
   routineNextAt?: string | null;
   pastDeadlineConfirmed?: boolean;
+  isOffScreen?: boolean;
 }
 
 export interface GeneratePlanInput {
@@ -150,6 +151,7 @@ export interface SessionRecord {
   endedAt?: string | null;
   createdAt: string;
   updatedAt: string;
+  lockInMode: boolean;
 }
 
 export interface SessionSummaryRecord extends SessionRecord {
@@ -186,6 +188,7 @@ export interface StepRecord {
   status: StepStatus;
   atomizationLevel: number;
   delayCount: number;
+  isOffScreen?: boolean;
   createdAt: string;
   updatedAt: string;
   completedAt?: string | null;
@@ -203,6 +206,7 @@ export interface ActivityRecord {
   routineIntervalMinutes?: number | null;
   routineNextAt?: string | null;
   status: StepStatus;
+  isOffScreen?: boolean;
   createdAt: string;
   updatedAt: string;
   completedAt?: string | null;
@@ -359,6 +363,9 @@ export interface NerveSettings {
   gmailEnabled: boolean;
   googleClientId: string;
   googleClientSecret: string;
+  breakRemindersEnabled: boolean;
+  breakIntervalMinutes: 15 | 25 | 30 | 45 | 60 | 90;
+  breakDurationMinutes: 5 | 10 | 15 | 20 | 30;
 }
 
 export interface AppSnapshot {
@@ -381,9 +388,11 @@ export interface AppSnapshot {
   breakEndsAt: string | null;
   bannedSiteAlert: BannedSiteAlert | null;
   bannedSiteStrikeCount: number;
+  lockInAlert: boolean;
   screenshotFolder: string;
   connectors: ConnectorStatus[];
   inboxItems: ActionItem[];
+  hasGoogleClientSecret: boolean;
 }
 
 export const defaultSettings: NerveSettings = {
@@ -402,5 +411,8 @@ export const defaultSettings: NerveSettings = {
   soundEnabled: false,
   gmailEnabled: false,
   googleClientId: "",
-  googleClientSecret: ""
+  googleClientSecret: "",
+  breakRemindersEnabled: false,
+  breakIntervalMinutes: 25,
+  breakDurationMinutes: 5
 };

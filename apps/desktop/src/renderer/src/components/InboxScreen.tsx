@@ -1,0 +1,207 @@
+import { useState } from "react";
+import { CalendarClock, Check, Monitor, Plus, RefreshCw, Settings } from "lucide-react";
+import type { AppSnapshot } from "@nerve/shared";
+import { EmptyState } from "./EmptyState";
+import { useCopy } from "../lib/copy";
+import type { ActionItem, ActionItemStatus, ActionItemUrgency, ConnectorStatus } from "../lib/types";
+import { suggestedReminderForInboxItem, fromDateTimeLocal } from "../lib/utils";
+
+export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: AppSnapshot; language: "en" | "zh"; onStartOnItem?: (goal: string) => void }) {
+  const t = useCopy(language);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [reminderDrafts, setReminderDrafts] = useState<Record<string, string>>({});
+  const connectors = (snapshot as any).connectors as ConnectorStatus[] ?? [];
+  const inboxItems = (snapshot as any).inboxItems as ActionItem[] ?? [];
+  const gmailConnector = connectors.find((c) => c.name === "gmail");
+  const isConnected = gmailConnector?.connected === true;
+  const urgencyRank: Record<ActionItemUrgency, number> = { high: 0, medium: 1, low: 2 };
+  const visibleItems = inboxItems
+    .filter((i) => i.status !== "dismissed")
+    .slice()
+    .sort((a, b) => {
+      const u = urgencyRank[a.urgency] - urgencyRank[b.urgency];
+      if (u !== 0) return u;
+      return b.extractedAt.localeCompare(a.extractedAt);
+    });
+  const googleClientId = (snapshot.settings as any).googleClientId as string ?? "";
+  const hasActivePlan = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
+
+  async function handleConnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).connectGmail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to connect Gmail.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleDisconnect() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).disconnectGmail();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to disconnect.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleFetch() {
+    setBusy(true);
+    setError(null);
+    try {
+      await (window.nerve as any).fetchInbox();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to scan inbox.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function handleUpdateItem(itemId: string, status: ActionItemStatus) {
+    if (status === "promoted" && !hasActivePlan) {
+      setError(t("inboxNoActivePlan"));
+      return;
+    }
+    if (status === "promoted") {
+      const item = inboxItems.find((candidate) => candidate.id === itemId);
+      const reminderAt = reminderDrafts[itemId] || (item ? suggestedReminderForInboxItem(item) : "");
+      if (!reminderAt) {
+        setError(t("reminderRequired"));
+        return;
+      }
+      try {
+        setError(null);
+        await window.nerve.promoteInboxItem(itemId, { reminderAt: fromDateTimeLocal(reminderAt) ?? "" });
+      } catch (err) {
+        setError(err instanceof Error ? err.message : "Failed to add item.");
+      }
+      return;
+    }
+    try {
+      await (window.nerve as any).updateInboxItem(itemId, status);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to update item.");
+    }
+  }
+
+  const urgencyColor: Record<ActionItemUrgency, string> = {
+    high: "#ef4444",
+    medium: "#f59e0b",
+    low: "#6b7280"
+  };
+
+  return (
+    <section className="settings-layout">
+      <div className="page-title compact">
+        <span className="eyebrow">Gmail</span>
+        <h2>{t("inboxTitle")}</h2>
+      </div>
+
+      {!googleClientId ? (
+        <div style={{ padding: "1.5rem", background: "rgba(255,255,255,0.04)", borderRadius: 8, marginBottom: "1rem" }}>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.8 }}>{t("inboxSetupHint")}</p>
+          <button onClick={() => window.nerve.openMain("/settings")}>
+            <Settings size={16} /> {t("settings")}
+          </button>
+        </div>
+      ) : !isConnected ? (
+        <div style={{ padding: "1.5rem", background: "rgba(255,255,255,0.04)", borderRadius: 8, marginBottom: "1rem" }}>
+          <p style={{ marginBottom: "0.75rem", opacity: 0.8 }}>{t("inboxNotConnected")}</p>
+          {gmailConnector?.error && (
+            <p style={{ color: "#ef4444", fontSize: "0.8rem", marginBottom: "0.75rem" }}>{gmailConnector.error}</p>
+          )}
+          <button className="primary" disabled={busy} onClick={handleConnect}>
+            <Monitor size={16} /> {t("inboxConnect")}
+          </button>
+        </div>
+      ) : (
+        <>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.75rem", marginBottom: "1rem", padding: "0.75rem 1rem", background: "rgba(255,255,255,0.04)", borderRadius: 8 }}>
+            <span style={{ fontSize: "0.75rem", background: "rgba(34,197,94,0.15)", color: "#22c55e", padding: "2px 8px", borderRadius: 12, fontWeight: 600 }}>
+              {t("inboxConnected")}
+            </span>
+            {gmailConnector.email && (
+              <span style={{ opacity: 0.7, fontSize: "0.85rem" }}>{gmailConnector.email}</span>
+            )}
+            <div style={{ marginLeft: "auto", display: "flex", gap: "0.5rem" }}>
+              <button disabled={busy} onClick={handleFetch}>
+                <RefreshCw size={15} /> {busy ? t("inboxFetching") : t("inboxFetch")}
+              </button>
+              <button disabled={busy} onClick={handleDisconnect}>
+                {t("inboxDisconnect")}
+              </button>
+            </div>
+          </div>
+
+          {visibleItems.length === 0 ? (
+            <EmptyState icon={<Monitor size={18} />} title={t("inboxEmpty")} body="" />
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: "0.75rem" }}>
+              {visibleItems.map((item, index) => (
+                <article key={item.id} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                  <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                    {item.source === "calendar" ? <CalendarClock size={14} style={{ flexShrink: 0, opacity: 0.7, marginTop: 2 }} /> : <Monitor size={14} style={{ flexShrink: 0, opacity: 0.7, marginTop: 2 }} />}
+                    <strong style={{ flex: 1, fontSize: "0.9rem" }}>{item.title}</strong>
+                    {index === 0 && item.status === "pending" && (
+                      <span style={{ fontSize: "0.65rem", fontWeight: 700, padding: "2px 7px", borderRadius: 10, background: "rgba(239,68,68,0.18)", color: "#ef4444", flexShrink: 0 }}>
+                        {t("topPriority")}
+                      </span>
+                    )}
+                    <span style={{ fontSize: "0.7rem", fontWeight: 600, padding: "2px 7px", borderRadius: 10, background: `${urgencyColor[item.urgency]}22`, color: urgencyColor[item.urgency], flexShrink: 0 }}>
+                      {item.urgency}
+                    </span>
+                  </div>
+                  {item.description && (
+                    <p style={{ fontSize: "0.8rem", opacity: 0.7, margin: 0 }}>{item.description}</p>
+                  )}
+                  <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
+                    {item.suggestedTaskType && (
+                      <span style={{ fontSize: "0.7rem", padding: "2px 7px", borderRadius: 10, background: "rgba(255,255,255,0.08)", opacity: 0.8 }}>
+                        {item.suggestedTaskType}
+                      </span>
+                    )}
+                    {item.dueHint && (
+                      <span style={{ fontSize: "0.75rem", opacity: 0.6 }}>
+                        <CalendarClock size={11} style={{ display: "inline", verticalAlign: "middle", marginRight: 3 }} />
+                        {item.dueHint}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{ display: "flex", gap: "0.5rem", marginTop: "0.25rem" }}>
+                    {item.status !== "promoted" && (
+                      <label className="inbox-reminder-field">
+                        {t("noteReminder")}
+                        <input
+                          type="datetime-local"
+                          value={reminderDrafts[item.id] ?? suggestedReminderForInboxItem(item)}
+                          onChange={(event) => setReminderDrafts({ ...reminderDrafts, [item.id]: event.currentTarget.value })}
+                          title={t("inboxReminderHint")}
+                        />
+                        <span>{t("suggestedReminder")}</span>
+                      </label>
+                    )}
+                    <button className="primary" disabled={item.status === "promoted"} style={{ fontSize: "0.8rem", padding: "4px 12px" }} title={!hasActivePlan ? t("inboxNoActivePlan") : undefined} onClick={() => handleUpdateItem(item.id, "promoted")}>
+                      {item.status === "promoted" ? <Check size={13} /> : <Plus size={13} />}
+                      {item.status === "promoted" ? t("inboxAdded") : t("inboxPromote")}
+                    </button>
+                    {item.status !== "promoted" && <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
+                      {t("inboxDismiss")}
+                    </button>}
+                  </div>
+                </article>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+
+      {error && <p className="error-note" style={{ marginTop: "1rem" }}>{error}</p>}
+    </section>
+  );
+}

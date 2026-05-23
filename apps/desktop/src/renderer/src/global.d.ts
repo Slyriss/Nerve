@@ -1,10 +1,10 @@
 import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, SessionSummaryRecord, StepRecord, TaskType, ActionItemStatus } from "@nerve/shared";
 
-type NerveAction = "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak";
+type NerveAction = "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak";
 
 interface NerveBridge {
   getSnapshot: () => Promise<AppSnapshot>;
-  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }) => Promise<AppSnapshot>;
+  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[]; lockInMode?: boolean }) => Promise<AppSnapshot>;
   parseTaskList: (input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }) => Promise<{ steps: PlanStepDraft[]; taskTypes: TaskType[] }>;
   updateStep: (stepId: string, patch: Partial<StepRecord>) => Promise<AppSnapshot>;
   addStep: (sessionId: string) => Promise<AppSnapshot>;

@@ -3,7 +3,7 @@ import type { AppSnapshot, NerveSettings, PlanStepDraft, SessionLogData, Session
 
 const nerve = {
   getSnapshot: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:getSnapshot"),
-  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }): Promise<AppSnapshot> =>
+  startSession: (input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[]; lockInMode?: boolean }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:startSession", input),
   parseTaskList: (input: { goal: string; deadlineText?: string; taskTypes?: TaskType[] }): Promise<{ steps: PlanStepDraft[]; taskTypes: TaskType[] }> =>
     ipcRenderer.invoke("nerve:parseTaskList", input),
@@ -13,7 +13,7 @@ const nerve = {
   deleteStep: (stepId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:deleteStep", stepId),
   reorderStep: (stepId: string, direction: "up" | "down"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:reorderStep", stepId, direction),
-  action: (action: "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak"): Promise<AppSnapshot> =>
+  action: (action: "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:action", action),
   updateSettings: (patch: Partial<NerveSettings>): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateSettings", patch),

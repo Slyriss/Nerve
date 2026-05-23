@@ -31,6 +31,7 @@ import {
   type TaskType,
   type ActionItem,
   type ActionItemStatus,
+  type ConnectorName,
   type ConnectorStatus
 } from "@nerve/shared";
 import { schema, settingsTable } from "./db/schema.js";
@@ -72,6 +73,7 @@ let breakReminderAt: string | null = null;
 let breakEndsAt: string | null = null;
 let bannedSiteAlert: BannedSiteAlert | null = null;
 let bannedSiteStrikeCount = 0;
+let lockInAlert = false;
 let lastBannedSiteEventKey: string | null = null;
 let lastBannedSiteEventAt = 0;
 let currentBreadcrumbId: string | null = null;
@@ -318,7 +320,7 @@ function ensureStorage() {
     CREATE TABLE IF NOT EXISTS activities (
       id TEXT PRIMARY KEY, session_id TEXT NOT NULL, order_index INTEGER NOT NULL, title TEXT NOT NULL,
       task_type TEXT NOT NULL DEFAULT 'General writing', deadline_text TEXT NOT NULL DEFAULT '',
-      due_at TEXT, reminder_at TEXT, routine_interval_minutes INTEGER, routine_next_at TEXT, status TEXT NOT NULL,
+      due_at TEXT, reminder_at TEXT, routine_interval_minutes INTEGER, routine_next_at TEXT, is_off_screen INTEGER NOT NULL DEFAULT 0, status TEXT NOT NULL,
       created_at TEXT NOT NULL, updated_at TEXT NOT NULL, completed_at TEXT
     );
     CREATE TABLE IF NOT EXISTS guidance_steps (
@@ -403,6 +405,8 @@ function ensureStorage() {
   ensureColumn("steps", "routine_next_at", "TEXT");
   ensureColumn("activities", "routine_interval_minutes", "INTEGER");
   ensureColumn("activities", "routine_next_at", "TEXT");
+  ensureColumn("activities", "is_off_screen", "INTEGER NOT NULL DEFAULT 0");
+  ensureColumn("sessions", "lock_in_mode", "INTEGER NOT NULL DEFAULT 0");
   ensureColumn("ai_observations", "step_id", "TEXT");
   ensureColumn("ai_observations", "detected_task_type", "TEXT");
   migrateLegacyStepsToActivities();
@@ -511,7 +515,8 @@ function registerLocalFileProtocol() {
     const requestedPath = decodeURIComponent(url.pathname.slice(1));
     const resolvedPath = path.resolve(requestedPath);
     const allowedRoot = path.resolve(dataDir());
-    if (!resolvedPath.startsWith(allowedRoot)) {
+    const rel = path.relative(allowedRoot, resolvedPath);
+    if (rel.startsWith("..") || path.isAbsolute(rel)) {
       return new Response("Forbidden", { status: 403 });
     }
     return net.fetch(pathToFileURL(resolvedPath).toString());
@@ -531,7 +536,8 @@ function rowSession(row: any): SessionRecord {
     startedAt: row.started_at,
     endedAt: row.ended_at,
     createdAt: row.created_at,
-    updatedAt: row.updated_at
+    updatedAt: row.updated_at,
+    lockInMode: Boolean(row.lock_in_mode)
   };
 }
 
@@ -552,6 +558,7 @@ function rowStep(row: any): StepRecord {
     status: row.status,
     atomizationLevel: row.atomization_level,
     delayCount: row.delay_count,
+    isOffScreen: Boolean(row.is_off_screen),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at
@@ -571,6 +578,7 @@ function rowActivity(row: any): ActivityRecord {
     routineIntervalMinutes: row.routine_interval_minutes,
     routineNextAt: row.routine_next_at,
     status: row.status,
+    isOffScreen: Boolean(row.is_off_screen),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at
@@ -611,6 +619,7 @@ function rowActivityProjection(row: any): StepRecord {
     status: row.status,
     atomizationLevel: row.atomization_level ?? 0,
     delayCount: row.delay_count ?? 0,
+    isOffScreen: Boolean(row.is_off_screen),
     createdAt: row.created_at,
     updatedAt: row.updated_at,
     completedAt: row.completed_at
@@ -769,7 +778,7 @@ function getVisibleInboxItems(): ActionItem[] {
     id: r.id,
     title: r.title,
     description: r.description,
-    source: r.source as "gmail",
+    source: r.source as ConnectorName,
     sourceMessageId: r.source_message_id,
     urgency: r.urgency as "low" | "medium" | "high",
     suggestedTaskType: r.suggested_task_type,
@@ -870,6 +879,44 @@ function resolveSourceMessageId(value: unknown, messageIds: Set<string>, indexTo
   return indexToMessageId.get(raw) ?? "";
 }
 
+async function fetchGoogleCalendarEvents(accessToken: string): Promise<ActionItem[]> {
+  const timeMin = new Date().toISOString();
+  const timeMax = new Date(Date.now() + 48 * 60 * 60 * 1000).toISOString();
+  const url = `https://www.googleapis.com/calendar/v3/calendars/primary/events?timeMin=${encodeURIComponent(timeMin)}&timeMax=${encodeURIComponent(timeMax)}&singleEvents=true&orderBy=startTime&maxResults=20`;
+  try {
+    const response = await fetch(url, { headers: { Authorization: `Bearer ${accessToken}` } });
+    if (!response.ok) return [];
+    const data = await response.json() as any;
+    const events = (data.items ?? []) as any[];
+    const nowStr = now();
+    const nowMs = Date.now();
+    return events
+      .filter((event) => event.id && event.start && (event.start.dateTime || event.start.date))
+      .map((event) => {
+        const startStr: string = event.start.dateTime || event.start.date;
+        const startMs = Date.parse(startStr);
+        const diffH = Number.isFinite(startMs) ? (startMs - nowMs) / 3_600_000 : 999;
+        const urgency: "low" | "medium" | "high" = diffH <= 2 ? "high" : diffH <= 24 ? "medium" : "low";
+        const title = String(event.summary ?? "Calendar event").slice(0, 200);
+        const startLabel = Number.isFinite(startMs) ? new Date(startMs).toLocaleString() : startStr;
+        return {
+          id: id(),
+          title,
+          description: `${startLabel} — ${String(event.description ?? "Calendar event").slice(0, 400)}`,
+          source: "calendar" as ConnectorName,
+          sourceMessageId: String(event.id),
+          urgency,
+          suggestedTaskType: "Planning" as TaskType,
+          dueHint: startLabel,
+          extractedAt: nowStr,
+          status: "pending" as const
+        };
+      });
+  } catch {
+    return [];
+  }
+}
+
 function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
   const normalized = normalizeSettingsPatch(patch);
   for (const [key, value] of Object.entries(normalized)) {
@@ -882,6 +929,15 @@ function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
       .run();
   }
   cachedSettings = null;
+  // Reschedule or clear break reminders whenever the relevant settings change
+  if ("breakRemindersEnabled" in normalized || "breakIntervalMinutes" in normalized || "breakDurationMinutes" in normalized) {
+    const fresh = getSettings();
+    if (!fresh.breakRemindersEnabled) {
+      clearBreakSchedule();
+    } else if (!breakReminderAt && !breakEndsAt) {
+      scheduleNextBreak(fresh);
+    }
+  }
   resetCaptureLoop();
   resetReminderLoop();
   broadcast();
@@ -949,6 +1005,15 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (typeof patch.googleClientSecret === "string") {
     normalized.googleClientSecret = encryptApiKey(patch.googleClientSecret.trim());
+  }
+  if (typeof patch.breakRemindersEnabled === "boolean") {
+    normalized.breakRemindersEnabled = patch.breakRemindersEnabled;
+  }
+  if (patch.breakIntervalMinutes && (settingOptions.breakIntervalMinutes as readonly number[]).includes(patch.breakIntervalMinutes)) {
+    normalized.breakIntervalMinutes = patch.breakIntervalMinutes;
+  }
+  if (patch.breakDurationMinutes && (settingOptions.breakDurationMinutes as readonly number[]).includes(patch.breakDurationMinutes)) {
+    normalized.breakDurationMinutes = patch.breakDurationMinutes;
   }
   return normalized;
 }
@@ -1387,8 +1452,23 @@ function checkReminders() {
     overlayExpanded = true;
   }
   const breakChanged = checkBreakReminders();
-  if (rows.length > 0 || breakChanged) broadcast();
-  return rows.length > 0 || breakChanged;
+  let routinePromoted = false;
+  const dueRoutines = db.prepare(`
+    SELECT * FROM activities
+    WHERE session_id = ? AND status = 'pending' AND routine_next_at IS NOT NULL AND routine_next_at <= ?
+    ORDER BY routine_next_at ASC LIMIT 5
+  `).all(session.id, timestamp) as any[];
+  for (const row of dueRoutines) {
+    moveActivityToTop(session.id, row.id);
+    const activeAfter = setActiveActivity(session.id, row.id);
+    if (activeAfter) {
+      addEvent(session.id, "routine_promoted", `Routine is due now: ${activeAfter.title}.`, { stepId: activeAfter.id });
+      routinePromoted = true;
+    }
+  }
+  const changed = rows.length > 0 || breakChanged || routinePromoted;
+  if (changed) broadcast();
+  return changed;
 }
 
 function nextReminderWakeDelay(sessionId: string) {
@@ -1396,7 +1476,10 @@ function nextReminderWakeDelay(sessionId: string) {
   const nextReminder = db
     .prepare("SELECT reminder_at FROM reminders WHERE session_id = ? AND status = 'scheduled' ORDER BY reminder_at LIMIT 1")
     .get(sessionId) as { reminder_at: string } | undefined;
-  for (const value of [nextReminder?.reminder_at, breakEndsAt, breakReminderAt]) {
+  const nextRoutine = db
+    .prepare("SELECT routine_next_at FROM activities WHERE session_id = ? AND status = 'pending' AND routine_next_at IS NOT NULL ORDER BY routine_next_at LIMIT 1")
+    .get(sessionId) as { routine_next_at: string } | undefined;
+  for (const value of [nextReminder?.reminder_at, nextRoutine?.routine_next_at, breakEndsAt, breakReminderAt]) {
     if (!value) continue;
     const parsed = Date.parse(value);
     if (Number.isFinite(parsed)) wakeTimes.push(parsed);
@@ -1577,6 +1660,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
   if (!session) return;
   const activeStep = getActiveStep(session.id);
   if (!activeStep) return;
+  if (activeStep.isOffScreen) return;
 
   try {
     const settings = getSettings();
@@ -1676,6 +1760,14 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       }
     }
 
+    if (session.lockInMode && observation.userState === "unproductive_drift" && !thinkingActive) {
+      lockInAlert = true;
+      overlayExpanded = true;
+      overlaySuppressUntil = 0;
+      showBlockerWindow();
+      addEvent(session.id, "lock_in_triggered", "Lock-in mode: refocus on your task.", { userState: observation.userState });
+    }
+
     db.prepare(`INSERT INTO ai_observations (
       id, session_id, screenshot_id, step_id, provider, model, user_state, task_relevance, progress_state, active_app,
       active_context, visible_change_summary, concise_explanation, suggested_next_action, suggested_step_complete,
@@ -1764,6 +1856,69 @@ function clearReminderLoop() {
   reminderTimer = null;
 }
 
+function clearBreakSchedule() {
+  breakReminderAt = null;
+  breakEndsAt = null;
+}
+
+function scheduleNextBreak(settings?: NerveSettings) {
+  const s = settings ?? getSettings();
+  if (!s.breakRemindersEnabled) {
+    clearBreakSchedule();
+    return;
+  }
+  breakEndsAt = null;
+  breakReminderAt = new Date(Date.now() + s.breakIntervalMinutes * 60 * 1000).toISOString();
+}
+
+function checkBreakReminders(): boolean {
+  const settings = getSettings();
+  if (!settings.breakRemindersEnabled) return false;
+
+  // Break is active — check if it has ended
+  if (breakEndsAt) {
+    if (Date.now() < Date.parse(breakEndsAt)) return false;
+    const session = getCurrentActiveSession();
+    if (session) {
+      finishBreak(session, false);
+    } else {
+      clearBreakSchedule();
+    }
+    return true;
+  }
+
+  // Break is due — start it
+  if (breakReminderAt && Date.now() >= Date.parse(breakReminderAt)) {
+    breakReminderAt = null;
+    breakEndsAt = new Date(Date.now() + settings.breakDurationMinutes * 60 * 1000).toISOString();
+    const session = getCurrentActiveSession();
+    if (session) {
+      addEvent(session.id, "break_started", `Break time: ${settings.breakDurationMinutes} minutes.`, {
+        durationMinutes: settings.breakDurationMinutes
+      });
+    }
+    if (Notification.isSupported()) {
+      const n = new Notification({
+        title: "Break time",
+        body: `Take ${settings.breakDurationMinutes} min. Nerve will check back in.`,
+        silent: false
+      });
+      n.show();
+    }
+    overlayExpanded = true;
+    return true;
+  }
+
+  return false;
+}
+
+function finishBreak(session: SessionRecord, early: boolean) {
+  breakEndsAt = null;
+  breakReminderAt = null;
+  addEvent(session.id, early ? "break_ended_early" : "break_ended", "Break complete. Back to work.", {});
+  scheduleNextBreak();
+}
+
 function stopSessionLoops() {
   captureService?.stop();
   captureService = null;
@@ -1810,7 +1965,7 @@ function snapshot(): AppSnapshot {
     observations: sessionId ? (db.prepare("SELECT * FROM ai_observations WHERE session_id = ? ORDER BY created_at DESC LIMIT 50").all(sessionId) as any[]).map(rowObservation) : [],
     taskHistory: sessionId ? (db.prepare("SELECT * FROM task_history WHERE session_id = ? ORDER BY created_at DESC LIMIT 80").all(sessionId) as any[]).map(rowTaskHistory) : [],
     reminders: sessionId ? (db.prepare("SELECT * FROM reminders WHERE session_id = ? ORDER BY reminder_at ASC LIMIT 80").all(sessionId) as any[]).map(rowReminder) : [],
-    settings: getSettings(),
+    settings: (s => ({ ...s, googleClientSecret: '' }))(getSettings()),
     overlayExpanded,
     delayUntil,
     thinkingPauseUntil,
@@ -1818,9 +1973,11 @@ function snapshot(): AppSnapshot {
     breakEndsAt,
     bannedSiteAlert,
     bannedSiteStrikeCount,
+    lockInAlert,
     screenshotFolder: screenshotDir(),
     connectors: getConnectorStatuses(),
-    inboxItems: getVisibleInboxItems()
+    inboxItems: getVisibleInboxItems(),
+    hasGoogleClientSecret: !!getSettings().googleClientSecret
   };
 }
 
@@ -1925,6 +2082,7 @@ function showBlockerWindow() {
 }
 
 function hideBlockerWindow() {
+  lockInAlert = false;
   if (blockerWindow && !blockerWindow.isDestroyed()) {
     blockerWindow.hide();
   }
@@ -2024,7 +2182,7 @@ function registerIpc() {
     bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
     cachedSettings = null;
-    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM activities; DELETE FROM guidance_steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history; DELETE FROM reminders;");
+    db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM activities; DELETE FROM guidance_steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history; DELETE FROM reminders; DELETE FROM connector_tokens; DELETE FROM inbox_items;");
     fs.rmSync(screenshotDir(), { recursive: true, force: true });
     fs.mkdirSync(screenshotDir(), { recursive: true });
     broadcast();
@@ -2065,7 +2223,7 @@ function registerIpc() {
 
   ipcMain.handle("nerve:disconnectGmail", async (): Promise<AppSnapshot> => {
     db.prepare("DELETE FROM connector_tokens WHERE connector = 'gmail'").run();
-    db.prepare("DELETE FROM inbox_items WHERE source = 'gmail'").run();
+    db.prepare("DELETE FROM inbox_items WHERE source IN ('gmail', 'calendar')").run();
     broadcast();
     return snapshot();
   });
@@ -2078,16 +2236,24 @@ function registerIpc() {
       (db.prepare("SELECT source_message_id FROM inbox_items WHERE source = 'gmail'").all() as any[]).map((r: any) => r.source_message_id)
     );
     const newMessages = messages.filter(m => !existingIds.has(m.id));
+    const insertStmt = db.prepare(`
+      INSERT OR IGNORE INTO inbox_items (id, source, source_message_id, title, description, urgency, suggested_task_type, due_hint, status, extracted_at, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
+    `);
+    const nowStr = now();
     if (newMessages.length) {
       const items = await extractActionItemsFromMessages(newMessages);
-      const insertStmt = db.prepare(`
-        INSERT OR IGNORE INTO inbox_items (id, source, source_message_id, title, description, urgency, suggested_task_type, due_hint, status, extracted_at, created_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)
-      `);
-      const nowStr = now();
       for (const item of items) {
         insertStmt.run(item.id, item.source, item.sourceMessageId, item.title, item.description, item.urgency, item.suggestedTaskType, item.dueHint ?? null, item.extractedAt, nowStr);
       }
+    }
+    const existingCalendarIds = new Set<string>(
+      (db.prepare("SELECT source_message_id FROM inbox_items WHERE source = 'calendar'").all() as any[]).map((r: any) => r.source_message_id)
+    );
+    const calendarItems = await fetchGoogleCalendarEvents(accessToken);
+    for (const item of calendarItems) {
+      if (existingCalendarIds.has(item.sourceMessageId)) continue;
+      insertStmt.run(item.id, item.source, item.sourceMessageId, item.title, item.description, item.urgency, item.suggestedTaskType, item.dueHint ?? null, item.extractedAt, nowStr);
     }
     broadcast();
     return snapshot();
@@ -2132,6 +2298,9 @@ function registerIpc() {
     }
     const row = db.prepare("SELECT * FROM inbox_items WHERE id = ?").get(itemId) as any;
     if (!row) throw new Error("Inbox item not found.");
+    // Idempotency guard: only promote if still pending (prevents duplicate steps on double-click)
+    const updated = db.prepare("UPDATE inbox_items SET status = 'promoted' WHERE id = ? AND status = 'pending'").run(itemId);
+    if (updated.changes === 0) return snapshot();
     addPlanStepFromSuggestion({
       sessionId: session.id,
       title: row.title,
@@ -2144,7 +2313,6 @@ function registerIpc() {
       eventType: "inbox_item_added_to_plan",
       eventMessage: "An inbox item was added to the plan."
     });
-    db.prepare("UPDATE inbox_items SET status = 'promoted' WHERE id = ?").run(itemId);
     broadcast();
     return snapshot();
   });
@@ -2175,7 +2343,7 @@ function registerIpc() {
     return snapshot();
   });
 
-  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[] }) => {
+  ipcMain.handle("nerve:startSession", async (_event, input: { goal: string; deadlineText?: string; taskType?: TaskType; taskTypes?: TaskType[]; parsedSteps?: PlanStepDraft[]; lockInMode?: boolean }) => {
     const goal = typeof input.goal === "string" ? input.goal.trim() : "";
     if (!goal) {
       throw new Error("A goal is required.");
@@ -2204,7 +2372,7 @@ function registerIpc() {
 
     stopSessionLoops();
     db.prepare("UPDATE sessions SET status = 'completed', ended_at = ?, updated_at = ? WHERE status IN ('active', 'paused')").run(timestamp, timestamp);
-    db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?)").run(
+    db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at, lock_in_mode) VALUES (?, ?, ?, ?, ?, 'active', ?, NULL, ?, ?, ?)").run(
       sessionId,
       goal,
       taskType,
@@ -2212,7 +2380,8 @@ function registerIpc() {
       input.deadlineText || "",
       timestamp,
       timestamp,
-      timestamp
+      timestamp,
+      input.lockInMode ? 1 : 0
     );
     const insertActivity = db.prepare("INSERT INTO activities (id, session_id, order_index, title, task_type, deadline_text, due_at, reminder_at, routine_interval_minutes, routine_next_at, status, created_at, updated_at, completed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)");
     const insertGuidance = db.prepare("INSERT INTO guidance_steps (id, activity_id, session_id, order_index, next_action, explanation, status, atomization_level, delay_count, created_at, updated_at, completed_at) VALUES (?, ?, ?, 0, ?, ?, ?, 0, 0, ?, ?, NULL)");
@@ -2412,7 +2581,8 @@ function registerIpc() {
       routineIntervalMinutes: "routine_interval_minutes",
       routineNextAt: "routine_next_at",
       status: "status",
-      orderIndex: "order_index"
+      orderIndex: "order_index",
+      isOffScreen: "is_off_screen"
     } as const;
     for (const key of Object.keys(activityColumnMap) as Array<keyof typeof activityColumnMap>) {
       if (patch[key] !== undefined) {
@@ -2422,7 +2592,9 @@ function registerIpc() {
             ? validIso(patch[key] as string | null | undefined)
             : key === "routineIntervalMinutes"
               ? normalizeRoutineInterval(patch[key], "")
-              : patch[key];
+              : key === "isOffScreen"
+                ? (patch[key] ? 1 : 0)
+                : patch[key];
         db.prepare(`UPDATE activities SET ${column} = ?, updated_at = ? WHERE id = ?`).run(value, now(), stepId);
       }
     }
@@ -2463,7 +2635,7 @@ function registerIpc() {
       resetReminderLoop();
     }
     if (existing.status === "active" && patch.status === "complete") {
-      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
+      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status IN ('scheduled', 'triggered')").run(stepId);
       activateNextPendingStep(existing.session_id, existing.order_index);
       addEvent(existing.session_id, "step_done", "Step marked done. Moving to the next step.", { stepId });
     }
@@ -2504,7 +2676,7 @@ function registerIpc() {
     if (step) {
       db.prepare("DELETE FROM activities WHERE id = ?").run(stepId);
       db.prepare("DELETE FROM guidance_steps WHERE activity_id = ?").run(stepId);
-      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status = 'scheduled'").run(stepId);
+      db.prepare("UPDATE reminders SET status = 'dismissed' WHERE step_id = ? AND status IN ('scheduled', 'triggered')").run(stepId);
       resetReminderLoop();
       addEvent(step.session_id, "step_deleted", "A plan step was deleted.", { title: step.title });
       if (step.status === "active") {
@@ -2538,7 +2710,7 @@ function registerIpc() {
     return snapshot();
   });
 
-  ipcMain.handle("nerve:action", async (_event, action: "done" | "thinking" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak") => {
+  ipcMain.handle("nerve:action", async (_event, action: "done" | "thinking" | "delay" | "markDone" | "keepWorking" | "repeatRoutine" | "endBreak") => {
     const session = getCurrentActiveSession();
     if (!session) return snapshot();
     if (action === "endBreak") {
@@ -2581,8 +2753,35 @@ function registerIpc() {
       } else {
         const minutes = getSettings().thinkingPauseMinutes;
         clearDelayTimer();
+        delayUntil = null;
         thinkingPauseUntil = new Date(Date.now() + minutes * 60_000).toISOString();
         addEvent(session.id, "thinking_clicked", "Got it. I’ll hold this step while you think.", { until: thinkingPauseUntil });
+      }
+      overlayExpanded = true;
+    }
+
+    if (action === "delay") {
+      const activeUntil = delayUntil ? Date.parse(delayUntil) : 0;
+      if (activeUntil > Date.now()) {
+        clearDelayTimer();
+        delayUntil = null;
+        addEvent(session.id, "delay_cancelled", "Delay cancelled. Back to the current step.");
+      } else {
+        clearDelayTimer();
+        if (thinkingPauseUntil && Date.parse(thinkingPauseUntil) > Date.now()) {
+          thinkingPauseUntil = null;
+        }
+        delayUntil = new Date(Date.now() + 5 * 60_000).toISOString();
+        const guidance = getActiveGuidanceStep(step.id);
+        if (guidance) {
+          db.prepare("UPDATE guidance_steps SET delay_count = delay_count + 1, updated_at = ? WHERE id = ?").run(timestamp, guidance.id);
+        }
+        addEvent(session.id, "delay_clicked", "Got it. I'll check back in 5 minutes.", { until: delayUntil });
+        delayTimer = setTimeout(() => {
+          delayUntil = null;
+          delayTimer = null;
+          broadcast();
+        }, 5 * 60_000);
       }
       overlayExpanded = true;
     }

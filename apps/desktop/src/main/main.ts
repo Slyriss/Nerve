@@ -87,6 +87,7 @@ let lockInWarningStartedAt: string | null = null;
 let lockInWarningTimer: NodeJS.Timeout | null = null;
 let lastBannedSiteEventKey: string | null = null;
 let lastBannedSiteEventAt = 0;
+let blockerSuppressUntil = 0;
 let currentBreadcrumbId: string | null = null;
 let currentBreadcrumbKey: string | null = null;
 let currentBreadcrumbStartedAt: string | null = null;
@@ -1922,7 +1923,7 @@ function handleBannedSiteDetection(sessionId: string, settings: NerveSettings, c
   };
   overlayExpanded = true;
   overlaySuppressUntil = 0;
-  showBlockerWindow();
+  if (Date.now() >= blockerSuppressUntil) showBlockerWindow();
   const eventKey = `${sessionId}|${rule}|${context.activeApp}|${context.windowTitle}`;
   if (eventKey !== lastBannedSiteEventKey || Date.now() - lastBannedSiteEventAt > 60_000) {
     lastBannedSiteEventKey = eventKey;
@@ -2655,6 +2656,7 @@ function registerIpc() {
     app.quit();
   });
   ipcMain.handle("nerve:dismissBlocker", () => {
+    blockerSuppressUntil = Date.now() + 30_000;
     hideBlockerWindow();
     broadcast();
     setTimeout(() => captureService?.captureNow("window-change"), 3000);
@@ -2704,6 +2706,7 @@ function registerIpc() {
     hideBlockerWindow();
     bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
+    blockerSuppressUntil = 0;
     cachedSettings = null;
     db.exec("DELETE FROM sessions; DELETE FROM steps; DELETE FROM activities; DELETE FROM guidance_steps; DELETE FROM screenshots; DELETE FROM ai_observations; DELETE FROM events; DELETE FROM breadcrumbs; DELETE FROM task_history; DELETE FROM reminders; DELETE FROM connector_tokens; DELETE FROM inbox_items;");
     fs.rmSync(screenshotDir(), { recursive: true, force: true });
@@ -2948,6 +2951,7 @@ function registerIpc() {
     hideBlockerWindow();
     bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
+    blockerSuppressUntil = 0;
     addEvent(sessionId, "session_started", "Session started.", { goal, provider: analysisService.providerName, taskTypes });
     for (const scope of taskTypes) {
       addTaskHistory(sessionId, scope, "session_start", "high", `Session scope added: ${scope}`);
@@ -2978,6 +2982,7 @@ function registerIpc() {
     hideBlockerWindow();
     bannedSiteStrikeCount = 0;
     lastBannedSiteEventKey = null;
+    blockerSuppressUntil = 0;
     addEvent(session.id, "session_ended", "Session ended by user.");
     broadcast();
     return snapshot();

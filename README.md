@@ -113,6 +113,20 @@ pnpm dev
 
 ---
 
+## Using ElevenLabs
+
+Voice coach needs ElevenLabs for speech-to-text and text-to-speech. Set these in Settings, or pass them via environment variables:
+
+```powershell
+$env:ELEVENLABS_API_KEY = "your_key"
+$env:ELEVENLABS_VOICE_ID = "your_voice_id"
+pnpm dev
+```
+
+`NERVE_ELEVENLABS_API_KEY` and `NERVE_ELEVENLABS_VOICE_ID` are also supported aliases.
+
+---
+
 ## Using Gmail
 
 Connect from the Inbox screen. The app uses a built-in Google OAuth client ID by default. Override if needed:

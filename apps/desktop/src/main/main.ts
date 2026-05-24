@@ -1,4 +1,4 @@
-import { app, BrowserWindow, globalShortcut, ipcMain, net, Notification, powerMonitor, protocol, safeStorage, screen, shell } from "electron";
+import { app, BrowserWindow, globalShortcut, ipcMain, nativeImage, net, Notification, powerMonitor, protocol, safeStorage, screen, shell } from "electron";
 import { CaptureService, capturePrimaryScreen, getActiveWindowFallback, imageHash, isNoisyDetection, type ScreenCapture } from "./capture.js";
 import { AnalysisService } from "./analysis.js";
 import Database from "better-sqlite3";
@@ -105,6 +105,12 @@ const MANUAL_COLLAPSE_COOLDOWN_MS = 60_000;
 const MAX_REMINDER_WAKE_MS = 60_000;
 const LOCK_IN_BLOCKER_DELAY_MS = 20_000;
 const APP_DISPLAY_NAME = "别meow鱼";
+const APP_USER_MODEL_ID = "com.nerve.biemeowyu";
+
+app.setName(APP_DISPLAY_NAME);
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_USER_MODEL_ID);
+}
 
 const settingOptions = {
   aiProvider: ["deepseek"],
@@ -2331,6 +2337,20 @@ function canAutoExpandOverlay() {
   return Date.now() >= overlaySuppressUntil;
 }
 
+function appIconPath() {
+  const candidates = [
+    path.resolve(__dirname, "../../../../images/cat.png"),
+    path.resolve(process.cwd(), "../../images/cat.png"),
+    path.resolve(process.cwd(), "images/cat.png")
+  ];
+  return candidates.find((candidate) => fs.existsSync(candidate)) ?? candidates[0];
+}
+
+function appIcon() {
+  const icon = nativeImage.createFromPath(appIconPath());
+  return icon.isEmpty() ? undefined : icon;
+}
+
 function expandOverlayFromSystem() {
   if (!canAutoExpandOverlay()) return false;
   overlayExpanded = true;
@@ -2426,6 +2446,7 @@ function createOverlayWindow() {
     frame: false,
     transparent: true,
     backgroundColor: "#00000000",
+    icon: appIcon(),
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -2459,6 +2480,7 @@ function createCatWindow() {
   const workArea = display.workArea;
   catWindow = new BrowserWindow({
     title: `${APP_DISPLAY_NAME} cat`,
+    icon: appIcon(),
     width: catScreenWidth,
     height: catScreenHeight,
     x: workArea.x + workArea.width - overlaySlimWidth - catScreenWidth - 20,
@@ -2523,6 +2545,7 @@ function showBlockerWindow() {
     height: bounds.height,
     frame: false,
     transparent: false,
+    icon: appIcon(),
     alwaysOnTop: true,
     skipTaskbar: true,
     resizable: false,
@@ -2587,6 +2610,7 @@ function createMainWindow(route = "/") {
     minWidth: 860,
     minHeight: 640,
     title: "别Meow鱼",
+    icon: appIcon(),
     backgroundColor: "#00000000",
     backgroundMaterial: "mica",
     webPreferences: {

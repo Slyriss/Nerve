@@ -142,6 +142,7 @@ type VoiceState = "idle" | "listening" | "thinking" | "speaking";
 function VoiceCoach({ snapshot, compact = false }: { snapshot: AppSnapshot; compact?: boolean }) {
   const active = snapshot.session?.status === "active";
   const configured = Boolean(snapshot.settings.elevenLabsApiKey && snapshot.settings.elevenLabsVoiceId);
+  const t = useCopy(snapshot.settings.language);
   const [state, setState] = useState<VoiceState>("idle");
   const [error, setError] = useState("");
   const [expanded, setExpanded] = useState(false);
@@ -261,10 +262,10 @@ function VoiceCoach({ snapshot, compact = false }: { snapshot: AppSnapshot; comp
 
   const busy = state === "thinking" || state === "speaking";
   const title = !configured
-    ? "Add ElevenLabs API key and voice ID in Settings"
+    ? t("voiceAddElevenLabs")
     : state === "listening"
-      ? "Stop listening"
-      : "Start voice coach";
+      ? t("voiceStopListening")
+      : t("voiceStartCoach");
 
   if (compact) {
     return (
@@ -282,18 +283,18 @@ function VoiceCoach({ snapshot, compact = false }: { snapshot: AppSnapshot; comp
   }
 
   const inlineLabel =
-    state === "listening" ? "Listening… press again to stop" :
-    state === "thinking" ? "Thinking…" :
-    state === "speaking" ? "Speaking reply" :
-    !configured ? "Add ElevenLabs key in Settings" :
-    "Ask voice coach (Alt+M)";
+    state === "listening" ? t("voiceListeningStop") :
+    state === "thinking" ? t("voiceThinking") :
+    state === "speaking" ? t("voiceSpeakingReply") :
+    !configured ? t("voiceAddElevenLabsSettings") :
+    t("voiceAskCoach");
 
   return (
     <div className="voice-coach-inline">
       {state === "listening" && (
         <div className="voice-listening-banner">
           <span className="voice-listening-dot" />
-          Listening...
+          {t("voiceListening")}
         </div>
       )}
       <button

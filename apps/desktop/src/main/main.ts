@@ -1047,6 +1047,11 @@ function updateSettings(patch: Partial<NerveSettings>): NerveSettings {
       .run();
   }
   cachedSettings = null;
+  if ("language" in normalized) {
+    voiceHistory = [];
+    voiceGuidance = null;
+    voiceState = "idle";
+  }
   // Reschedule or clear break reminders whenever the relevant settings change
   if ("breakRemindersEnabled" in normalized || "breakIntervalMinutes" in normalized || "breakDurationMinutes" in normalized) {
     const fresh = getSettings();
@@ -1413,9 +1418,7 @@ function validIso(value: string | null | undefined): string | null {
 function reminderAtForStep(step: Pick<StepRecord, "dueAt" | "reminderAt">) {
   const explicit = validIso(step.reminderAt);
   if (explicit) return explicit;
-  const due = validIso(step.dueAt);
-  if (!due) return null;
-  return new Date(Date.parse(due) - 30 * 60_000).toISOString();
+  return null;
 }
 
 function isRoutineStep(step: Pick<StepRecord, "routineIntervalMinutes"> | any) {
@@ -1483,12 +1486,13 @@ function addPlanStepFromSuggestion(input: {
   taskType: TaskType;
   deadlineText?: string;
   dueAt?: string | null;
-  reminderAt: string;
+  reminderAt?: string | null;
   eventType: string;
   eventMessage: string;
 }) {
   const reminderAt = validIso(input.reminderAt);
-  if (!reminderAt) throw new Error("Choose a reminder time before adding this to the plan.");
+  const dueAt = validIso(input.dueAt);
+  if (!reminderAt && !dueAt) throw new Error("Choose a schedule time before adding this to the plan.");
   const session = getSessionById(input.sessionId);
   if (!session || !["active", "paused"].includes(session.status)) {
     throw new Error("No active plan right now. Make a plan from the main page first, then add this.");
@@ -1506,7 +1510,7 @@ function addPlanStepFromSuggestion(input: {
     title,
     input.taskType,
     input.deadlineText ?? "",
-    validIso(input.dueAt),
+    dueAt,
     reminderAt,
     timestamp,
     timestamp
@@ -1522,7 +1526,7 @@ function addPlanStepFromSuggestion(input: {
   );
   const step = getSteps(input.sessionId).find((candidate) => candidate.id === activityId);
   if (step) syncStepReminder(step);
-  addEvent(input.sessionId, input.eventType, input.eventMessage, { stepId: activityId, reminderAt });
+  addEvent(input.sessionId, input.eventType, input.eventMessage, { stepId: activityId, dueAt, reminderAt });
   return activityId;
 }
 
@@ -1650,6 +1654,10 @@ function cleanAudioBase64(input: string) {
   return trimmed.includes(",") ? trimmed.slice(trimmed.indexOf(",") + 1) : trimmed;
 }
 
+function elevenLabsLanguageCode(language: NerveSettings["language"]) {
+  return language === "zh" ? "zh" : "en";
+}
+
 async function transcribeWithElevenLabs(audioBase64: string, settings: NerveSettings) {
   const apiKey = settings.elevenLabsApiKey || process.env.ELEVENLABS_API_KEY || process.env.NERVE_ELEVENLABS_API_KEY || "";
   if (!apiKey) throw new Error("ElevenLabs API key is missing.");
@@ -1657,6 +1665,7 @@ async function transcribeWithElevenLabs(audioBase64: string, settings: NerveSett
   if (audioBytes.length === 0) throw new Error("No audio was recorded.");
   const form = new FormData();
   form.append("model_id", "scribe_v1");
+  form.append("language_code", elevenLabsLanguageCode(settings.language));
   form.append("file", new Blob([new Uint8Array(audioBytes)], { type: "audio/webm" }), "nerve-voice.webm");
   const response = await fetch("https://api.elevenlabs.io/v1/speech-to-text", {
     method: "POST",
@@ -1738,7 +1747,10 @@ async function generateVoiceCoachText(transcription: string, settings: NerveSett
       temperature: 0.35,
       max_tokens: 220,
       messages: [
-        { role: "system", content: "You are Nerve, a concise ADHD voice coach. Reply naturally, not JSON." },
+        {
+          role: "system",
+          content: `You are Nerve, a concise ADHD voice coach. Reply naturally, not JSON. Reply only in ${settings.language === "zh" ? "Mandarin Chinese using simplified Chinese characters" : "English"}.`
+        },
         { role: "user", content: prompt }
       ]
     })
@@ -1765,6 +1777,7 @@ async function synthesizeWithElevenLabs(text: string, settings: NerveSettings) {
     body: JSON.stringify({
       text,
       model_id: "eleven_multilingual_v2",
+      language_code: elevenLabsLanguageCode(settings.language),
       voice_settings: {
         stability: 0.48,
         similarity_boost: 0.72,
@@ -2749,7 +2762,7 @@ function registerIpc() {
     return snapshot();
   });
 
-  ipcMain.handle("nerve:promoteInboxItem", async (_event, itemId: string, input: { reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> => {
+  ipcMain.handle("nerve:promoteInboxItem", async (_event, itemId: string, input: { reminderAt?: string | null; dueAt?: string | null }): Promise<AppSnapshot> => {
     const session = getCurrentSession();
     if (!session || !["active", "paused"].includes(session.status)) {
       throw new Error("No active plan right now. Make a plan from the main page first, then come back to add inbox items to the session.");

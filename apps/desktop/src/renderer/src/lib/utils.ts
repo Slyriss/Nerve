@@ -113,6 +113,19 @@ export function nextScheduledLabel(steps: Schedulable[]) {
   return new Date(scheduleTime(next)).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
 }
 
+export function formatLocalDateTimeSlot(value: string) {
+  if (!value) return "--";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "--";
+  return date.toLocaleString([], {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit"
+  });
+}
+
 export function parseDeadlineText(text: string): { dueAt: string | null; reminderAt: string | null } {
   if (!text?.trim()) return { dueAt: null, reminderAt: null };
   const lc = text.toLowerCase();
@@ -142,6 +155,12 @@ export function parseDeadlineText(text: string): { dueAt: string | null; reminde
 
 export function defaultReminderLocal(minutes = 30) {
   return toDateTimeLocal(new Date(Date.now() + minutes * 60_000).toISOString());
+}
+
+export function addMinutesLocal(value: string, minutes: number) {
+  const parsed = Date.parse(value);
+  const base = Number.isFinite(parsed) ? parsed : Date.now();
+  return toDateTimeLocal(new Date(base + minutes * 60_000).toISOString());
 }
 
 export function nextLocalTime(hour: number, minute = 0) {

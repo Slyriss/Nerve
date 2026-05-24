@@ -53,12 +53,16 @@ export type CopyKey =
   | "replanSession" | "replanning" | "inboxTitle" | "inboxEmpty" | "inboxFetch"
   | "inboxFetching" | "inboxConnect" | "inboxDisconnect" | "inboxPromote"
   | "inboxAdded" | "inboxDismiss" | "inboxReminderHint" | "suggestedReminder"
-  | "inboxConnected" | "inboxNotConnected" | "inboxSetupHint" | "inboxNoActivePlan"
+  | "inboxWillSchedule" | "inboxChangeSlot" | "inboxReminderToggle" | "inboxReminderAt"
+  | "inboxNoReminder" | "inboxConnected" | "inboxNotConnected" | "inboxSetupHint" | "inboxNoActivePlan"
   | "quickNotes" | "notePlaceholder" | "noteReminder" | "addNote"
   | "reminderRequired" | "reminders" | "startNow" | "remindLater" | "setReminder"
   | "connectors" | "googleClientId" | "googleClientIdHint" | "googleClientSecret"
   | "googleClientSecretHint" | "saveGoogleOAuth" | "elevenLabsApiKey"
-  | "elevenLabsVoiceId" | "elevenLabsVoiceHint" | "voiceCoach";
+  | "elevenLabsVoiceId" | "elevenLabsVoiceHint" | "voiceCoach"
+  | "voiceAddElevenLabs" | "voiceStopListening" | "voiceStartCoach"
+  | "voiceListeningStop" | "voiceThinking" | "voiceSpeakingReply"
+  | "voiceAddElevenLabsSettings" | "voiceAskCoach" | "voiceListening";
 
 export type Schedulable = { reminderAt?: string | null; dueAt?: string | null; routineNextAt?: string | null };
 

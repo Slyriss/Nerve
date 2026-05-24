@@ -112,7 +112,12 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     inboxAdded: "Added",
     inboxDismiss: "Dismiss",
     inboxReminderHint: "Pick a reminder before adding.",
-    suggestedReminder: "Suggested window",
+    suggestedReminder: "Suggested slot",
+    inboxWillSchedule: "Will add to schedule",
+    inboxChangeSlot: "Activity time",
+    inboxReminderToggle: "Add reminder",
+    inboxReminderAt: "Reminder time",
+    inboxNoReminder: "No reminder",
     inboxConnected: "Connected",
     inboxNotConnected: "Not connected",
     inboxSetupHint: "Enter your Google OAuth Client ID in Settings to connect Gmail.",
@@ -135,7 +140,16 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     elevenLabsApiKey: "ElevenLabs API key",
     elevenLabsVoiceId: "ElevenLabs voice ID",
     elevenLabsVoiceHint: "Pick a voice from the ElevenLabs voice library.",
-    voiceCoach: "Voice coach"
+    voiceCoach: "Voice coach",
+    voiceAddElevenLabs: "Add ElevenLabs API key and voice ID in Settings",
+    voiceStopListening: "Stop listening",
+    voiceStartCoach: "Start voice coach",
+    voiceListeningStop: "Listening... press again to stop",
+    voiceThinking: "Thinking...",
+    voiceSpeakingReply: "Speaking reply",
+    voiceAddElevenLabsSettings: "Add ElevenLabs key in Settings",
+    voiceAskCoach: "Ask voice coach (Alt+M)",
+    voiceListening: "Listening..."
   },
   zh: {
     privateCopilot: "私人任务辅助",
@@ -248,7 +262,12 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     inboxAdded: "已加入",
     inboxDismiss: "忽略",
     inboxReminderHint: "加入前先选择提醒时间。",
-    suggestedReminder: "建议提醒时间",
+    suggestedReminder: "建议时间段",
+    inboxWillSchedule: "将加入日程",
+    inboxChangeSlot: "活动时间",
+    inboxReminderToggle: "添加提醒",
+    inboxReminderAt: "提醒时间",
+    inboxNoReminder: "无提醒",
     inboxConnected: "已连接",
     inboxNotConnected: "未连接",
     inboxSetupHint: "请在设置中输入 Google OAuth 客户端 ID 以连接 Gmail。",
@@ -271,7 +290,16 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     elevenLabsApiKey: "ElevenLabs API 密钥",
     elevenLabsVoiceId: "ElevenLabs 声音 ID",
     elevenLabsVoiceHint: "从 ElevenLabs 声音库选择一个声音。",
-    voiceCoach: "语音教练"
+    voiceCoach: "语音教练",
+    voiceAddElevenLabs: "请先在设置中添加 ElevenLabs API 密钥和声音 ID",
+    voiceStopListening: "停止聆听",
+    voiceStartCoach: "启动语音教练",
+    voiceListeningStop: "正在聆听... 再按一次停止",
+    voiceThinking: "正在思考...",
+    voiceSpeakingReply: "正在语音回复",
+    voiceAddElevenLabsSettings: "请在设置中添加 ElevenLabs 密钥",
+    voiceAskCoach: "询问语音教练 (Alt+M)",
+    voiceListening: "正在聆听..."
   }
 };
 

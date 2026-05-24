@@ -598,7 +598,7 @@ function migrateLegacyStepsToActivities() {
 
 function applyUserRequestedDefaults() {
   const timestamp = now();
-  for (const [key, value] of Object.entries({ aiProvider: "deepseek", screenshotIntervalSeconds: 10, panelOpacity: 0.5 })) {
+  for (const [key, value] of Object.entries({ aiProvider: "claude", screenshotIntervalSeconds: 10, panelOpacity: 0.5 })) {
     orm.insert(settingsTable)
       .values({ key, value: JSON.stringify(value), updatedAt: timestamp })
       .onConflictDoUpdate({
@@ -963,22 +963,24 @@ ${messagesSummary}
 Return ONLY valid JSON array.`;
 
   try {
-    const response = await fetch("https://api.deepseek.com/chat/completions", {
+    const inboxApiKey = settings.claudeApiKey || process.env.ANTHROPIC_API_KEY || "";
+    if (!inboxApiKey) return [];
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        "Authorization": `Bearer ${settings.deepseekApiKey}`
+        "x-api-key": inboxApiKey,
+        "anthropic-version": "2023-06-01"
       },
       body: JSON.stringify({
-        model: settings.deepseekModel || "deepseek-chat",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.3,
-        max_tokens: 1000
+        model: settings.claudeModel || process.env.CLAUDE_MODEL || "claude-haiku-4-5",
+        max_tokens: 1500,
+        messages: [{ role: "user", content: prompt }]
       })
     });
     if (!response.ok) return [];
     const data = await response.json() as any;
-    const content = data.choices?.[0]?.message?.content ?? "";
+    const content = data.content?.find((b: any) => b.type === "text")?.text ?? "";
     const match = content.match(/\[[\s\S]*\]/);
     if (!match) return [];
     const items = JSON.parse(match[0]) as any[];
@@ -1676,10 +1678,11 @@ function resetReminderLoop() {
 }
 
 function provider(settings = getSettings()): AIProvider {
-  const deepseek = new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
   const claudeKey = settings.claudeApiKey || process.env.ANTHROPIC_API_KEY || "";
-  const claude = claudeKey ? new ClaudeAIProvider(claudeKey, settings.claudeModel || process.env.CLAUDE_MODEL || "claude-haiku-4-5") : null;
-  return new FallbackAIProvider(deepseek, claude);
+  const deepseekKey = settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "";
+  const claude = new ClaudeAIProvider(claudeKey, settings.claudeModel || process.env.CLAUDE_MODEL || "claude-haiku-4-5");
+  const deepseek = deepseekKey ? new DeepSeekAIProvider(deepseekKey, settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat") : null;
+  return new FallbackAIProvider(claude, deepseek);
 }
 
 const analysisService = new AnalysisService(() => provider());
@@ -1778,31 +1781,26 @@ async function generateVoiceCoachText(transcription: string, settings: NerveSett
     voiceHistory,
     language: settings.language
   });
-  const apiKey = settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "";
-  if (!apiKey) throw new Error("DeepSeek API key is missing.");
-  const response = await fetch("https://api.deepseek.com/chat/completions", {
+  const apiKey = settings.claudeApiKey || process.env.ANTHROPIC_API_KEY || "";
+  if (!apiKey) throw new Error("Claude API key is missing.");
+  const response = await fetch("https://api.anthropic.com/v1/messages", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${apiKey}`
+      "x-api-key": apiKey,
+      "anthropic-version": "2023-06-01"
     },
     body: JSON.stringify({
-      model: settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat",
-      temperature: 0.35,
-      max_tokens: 220,
-      messages: [
-        {
-          role: "system",
-          content: `You are Nerve, a concise ADHD voice coach. Reply naturally, not JSON. Reply only in ${settings.language === "zh" ? "Mandarin Chinese using simplified Chinese characters" : "English"}.`
-        },
-        { role: "user", content: prompt }
-      ]
+      model: settings.claudeModel || process.env.CLAUDE_MODEL || "claude-haiku-4-5",
+      max_tokens: 300,
+      system: `You are Nerve, a concise ADHD voice coach. Reply naturally, not JSON. Reply only in ${settings.language === "zh" ? "Mandarin Chinese using simplified Chinese characters" : "English"}.`,
+      messages: [{ role: "user", content: prompt }]
     })
   });
-  if (!response.ok) throw new Error(`DeepSeek voice coach failed: ${response.status} ${await readErrorBody(response)}`);
-  const data = await response.json() as { choices?: Array<{ message?: { content?: string } }> };
-  const text = data.choices?.[0]?.message?.content?.trim();
-  if (!text) throw new Error("DeepSeek returned no voice coach response.");
+  if (!response.ok) throw new Error(`Claude voice coach failed: ${response.status} ${await readErrorBody(response)}`);
+  const data = await response.json() as { content?: Array<{ type: string; text?: string }> };
+  const text = data.content?.find((block) => block.type === "text")?.text?.trim();
+  if (!text) throw new Error("Claude returned no voice coach response.");
   return text.slice(0, 1200);
 }
 
@@ -2147,7 +2145,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
       observation = await analysisService.analyzeScreen(analyzeInput);
     } catch (error) {
       if (!isCurrentSessionActive(session.id)) return;
-      addEvent(session.id, "provider_error", "DeepSeek analysis failed. Check the API key, model, or network connection.", { error: String(error) });
+      addEvent(session.id, "provider_error", "AI analysis failed. Check the API key, model, or network connection.", { error: String(error) });
       overlayExpanded = true;
       broadcast();
       return;
@@ -2193,7 +2191,7 @@ async function handleCapture(capture: ScreenCapture, sessionId: string) {
     ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
       id(), session.id, screenshotId, activeStep.id,
       analysisService.providerName,
-      settings.aiProvider === "deepseek" ? settings.deepseekModel : "mock",
+      settings.aiProvider === "claude" ? settings.claudeModel : settings.aiProvider === "deepseek" ? settings.deepseekModel : "mock",
       observation.userState, observation.taskRelevance, observation.progressState, activeApp,
       observation.activeContext, observation.visibleChangeSummary, observation.conciseExplanation,
       observation.suggestedNextAction, observation.suggestedStepComplete ? 1 : 0,
@@ -2702,7 +2700,7 @@ function registerIpc() {
     });
     const steps = sortPlanStepsBySchedule(normalizePlanSteps(parsed.steps, taskType === "Mixed work" ? requestedScopes[0] : taskType, goal));
     if (steps.length === 0) {
-      throw new Error("DeepSeek did not return any usable tasks.");
+      throw new Error("AI did not return any usable tasks.");
     }
     return { steps, taskTypes: scopesFromSteps(steps, requestedScopes) };
   });
@@ -3393,7 +3391,7 @@ async function runSmokeTest() {
       const originalSettings = (await window.nerve.getSnapshot()).settings;
       await window.nerve.deleteAllData();
       await window.nerve.updateSettings({
-        aiProvider: "deepseek",
+        aiProvider: "claude",
         screenshotIntervalSeconds: 10,
         storeScreenshots: true
       });
@@ -3531,7 +3529,7 @@ async function runBreakTest() {
       if (!rejectedBlankGoal) throw new Error("Blank goal was accepted.");
 
       await window.nerve.updateSettings({
-        aiProvider: "deepseek",
+        aiProvider: "claude",
         screenshotIntervalSeconds: 999,
         panelOpacity: 2,
         storeScreenshots: false,

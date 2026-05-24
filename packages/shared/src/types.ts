@@ -404,7 +404,7 @@ export interface AppSnapshot {
 }
 
 export const defaultSettings: NerveSettings = {
-  aiProvider: "deepseek",
+  aiProvider: "claude",
   deepseekApiKey: "",
   deepseekModel: "deepseek-chat",
   claudeApiKey: "",

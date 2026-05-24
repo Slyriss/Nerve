@@ -1530,6 +1530,30 @@ function addPlanStepFromSuggestion(input: {
   return activityId;
 }
 
+function getOrCreateInboxCalendarSession(): SessionRecord {
+  const current = getCurrentSession();
+  if (current && ["active", "paused"].includes(current.status)) return current;
+  const resumable = getResumableSession();
+  if (resumable) return resumable;
+
+  const timestamp = now();
+  const sessionId = id();
+  const taskType: TaskType = "Email or admin";
+  const taskTypes: TaskType[] = [taskType];
+  db.prepare("INSERT INTO sessions (id, goal, task_type, task_types_json, deadline_text, status, started_at, ended_at, created_at, updated_at, lock_in_mode) VALUES (?, ?, ?, ?, '', 'paused', ?, NULL, ?, ?, 0)").run(
+    sessionId,
+    "Inbox calendar",
+    taskType,
+    JSON.stringify(taskTypes),
+    timestamp,
+    timestamp,
+    timestamp
+  );
+  activeSessionId = sessionId;
+  addEvent(sessionId, "inbox_calendar_created", "Inbox calendar created for scheduled email items.", {});
+  return rowSession(db.prepare("SELECT * FROM sessions WHERE id = ?").get(sessionId));
+}
+
 function activateReminderStep(reminder: ReminderRecord) {
   if (!reminder.stepId) return;
   const step = db.prepare("SELECT * FROM activities WHERE id = ?").get(reminder.stepId) as any;
@@ -2602,6 +2626,10 @@ function registerIpc() {
     broadcast();
   });
   ipcMain.handle("nerve:openMain", (_event, route = "/") => createMainWindow(route));
+  ipcMain.handle("nerve:quitApp", () => {
+    isQuitting = true;
+    app.quit();
+  });
   ipcMain.handle("nerve:dismissBlocker", () => {
     hideBlockerWindow();
     broadcast();
@@ -2763,10 +2791,7 @@ function registerIpc() {
   });
 
   ipcMain.handle("nerve:promoteInboxItem", async (_event, itemId: string, input: { reminderAt?: string | null; dueAt?: string | null }): Promise<AppSnapshot> => {
-    const session = getCurrentSession();
-    if (!session || !["active", "paused"].includes(session.status)) {
-      throw new Error("No active plan right now. Make a plan from the main page first, then come back to add inbox items to the session.");
-    }
+    const session = getOrCreateInboxCalendarSession();
     const row = db.prepare("SELECT * FROM inbox_items WHERE id = ?").get(itemId) as any;
     if (!row) throw new Error("Inbox item not found.");
     // Idempotency guard: only promote if still pending (prevents duplicate steps on double-click)
@@ -2809,6 +2834,15 @@ function registerIpc() {
     if (!row) return snapshot();
     db.prepare("UPDATE reminders SET status = 'scheduled', reminder_at = ?, triggered_at = NULL WHERE id = ?").run(nextAt, reminderId);
     addEvent(row.session_id, "reminder_snoozed", "Reminder rescheduled.", { reminderId, reminderAt: nextAt });
+    resetReminderLoop();
+    broadcast();
+    return snapshot();
+  });
+  ipcMain.handle("nerve:deleteReminder", async (_event, reminderId: string): Promise<AppSnapshot> => {
+    const row = db.prepare("SELECT * FROM reminders WHERE id = ?").get(reminderId) as any;
+    if (!row) return snapshot();
+    db.prepare("UPDATE reminders SET status = 'dismissed' WHERE id = ?").run(reminderId);
+    addEvent(row.session_id, "reminder_deleted", "A reminder was deleted from the calendar.", { reminderId, title: row.title });
     resetReminderLoop();
     broadcast();
     return snapshot();

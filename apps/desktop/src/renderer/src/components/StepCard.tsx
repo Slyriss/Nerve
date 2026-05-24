@@ -1,7 +1,7 @@
 import React from "react";
 import { Check, Clock, Pause, Play, RefreshCw } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
-import { useCopy } from "../lib/copy";
+import { taskTypeLabel, useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
 import { timeLeft, hasPastDeadline, isPast, completionStats, nextScheduledLabel } from "../lib/utils";
 import { catMoodForSnapshot, lockInWarningLevel } from "../lib/catAssets";
@@ -90,7 +90,7 @@ export function StepCard({
             <p className="eyebrow">{t("currentStep")}</p>
             <h2>{step.title}</h2>
           </div>
-          <span className="task-badge">{step.taskType}</span>
+          <span className="task-badge">{taskTypeLabel(step.taskType, snapshot.settings.language)}</span>
         </div>
         <CatMascot mood="calm" size={compact ? "small" : "medium"} />
         <p className="muted">{t("pausedBody")}</p>
@@ -107,7 +107,7 @@ export function StepCard({
           <p className="eyebrow">{t("currentStep")}</p>
           <h2>{step.title}</h2>
         </div>
-        <span className="task-badge">{step.taskType}</span>
+        <span className="task-badge">{taskTypeLabel(step.taskType, snapshot.settings.language)}</span>
       </div>
       <CatMascot
         mood={catMood}
@@ -119,48 +119,52 @@ export function StepCard({
         <span style={{ width: `${percent}%` }} />
       </div>
       <div className="step-meta">
-        <span>{completed}/{total} complete</span>
+        <span>{completed}/{total} {t("completeCount")}</span>
         {step.routineIntervalMinutes && <span>{t("routineEvery")} {step.routineIntervalMinutes} min</span>}
         {step.routineNextAt && <span className={isPast(step.routineNextAt) ? "past-due-chip" : ""}>{t("routineNext")} {new Date(step.routineNextAt).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}</span>}
         {step.delayCount > 0 && <span>{step.delayCount} delays</span>}
       </div>
-      {voiceSlot}
-      <p className="action-text">{voiceGuidance?.suggestedNextAction || observation?.suggestedNextAction || step.nextAction}</p>
-      <p className="muted">
-        {voiceGuidance
-          ? voiceGuidance.response
-          : thinking
-          ? t("thinkingHold")
-          : observation?.conciseExplanation || step.explanation || t("nextPhysical")}
-      </p>
-      {voiceGuidance && <p className="voice-guidance-note">Voice coach updated this from your last question.</p>}
-      {observation?.suggestedStepComplete && (
-        <div className="completion-prompt">
-          <span>{t("completePrompt")}</span>
-          <button onClick={() => action("markDone")}>{t("markDone")}</button>
-          <button onClick={() => action("keepWorking")}>{t("keepWorking")}</button>
+      <div className="step-card-body">
+        {voiceSlot}
+        <p className="action-text">{voiceGuidance?.suggestedNextAction || observation?.suggestedNextAction || step.nextAction}</p>
+        <p className="muted">
+          {voiceGuidance
+            ? voiceGuidance.response
+            : thinking
+            ? t("thinkingHold")
+            : observation?.conciseExplanation || step.explanation || t("nextPhysical")}
+        </p>
+        {voiceGuidance && <p className="voice-guidance-note">Voice coach updated this from your last question.</p>}
+        {observation?.suggestedStepComplete && (
+          <div className="completion-prompt">
+            <span>{t("completePrompt")}</span>
+            <button onClick={() => action("markDone")}>{t("markDone")}</button>
+            <button onClick={() => action("keepWorking")}>{t("keepWorking")}</button>
+          </div>
+        )}
+      </div>
+      <div className="step-card-actions">
+        <div className={compact ? "button-grid" : "button-row"}>
+          <button className="primary" style={compact ? { gridColumn: "1 / -1" } : undefined} onClick={() => action("done")}>
+            <Check size={16} /> {t("done")}
+          </button>
+          <button onClick={() => action("thinking")}>
+            {thinking ? <Play size={16} /> : <Pause size={16} />} {thinking ? t("cancelThinking") : t("thinking")}
+          </button>
+          <button onClick={() => action("delay")}>
+            <Clock size={16} /> {delayActive ? `Cancel (${timeLeft(snapshot.delayUntil)})` : t("delay")}
+          </button>
+          {step.routineIntervalMinutes && (
+            <button onClick={() => action("repeatRoutine")} title={t("repeatRoutine")}>
+              <RefreshCw size={16} /> {t("repeatRoutine")}
+            </button>
+          )}
+          {!compact && (
+            <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
+              <Pause size={16} /> {t("pauseSession")}
+            </button>
+          )}
         </div>
-      )}
-      <div className={compact ? "button-grid" : "button-row"}>
-        <button className="primary" style={compact ? { gridColumn: "1 / -1" } : undefined} onClick={() => action("done")}>
-          <Check size={16} /> {t("done")}
-        </button>
-        <button onClick={() => action("thinking")}>
-          {thinking ? <Play size={16} /> : <Pause size={16} />} {thinking ? t("cancelThinking") : t("thinking")}
-        </button>
-        <button onClick={() => action("delay")}>
-          <Clock size={16} /> {delayActive ? `Cancel (${timeLeft(snapshot.delayUntil)})` : t("delay")}
-        </button>
-        {step.routineIntervalMinutes && (
-          <button onClick={() => action("repeatRoutine")} title={t("repeatRoutine")}>
-            <RefreshCw size={16} /> {t("repeatRoutine")}
-          </button>
-        )}
-        {!compact && (
-          <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>
-            <Pause size={16} /> {t("pauseSession")}
-          </button>
-        )}
       </div>
     </section>
   );

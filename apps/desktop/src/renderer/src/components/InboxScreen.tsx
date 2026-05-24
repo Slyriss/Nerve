@@ -2,7 +2,7 @@ import { useState } from "react";
 import { CalendarClock, Check, Monitor, Plus, RefreshCw, Settings } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
 import { EmptyState } from "./EmptyState";
-import { useCopy } from "../lib/copy";
+import { taskTypeLabel, useCopy } from "../lib/copy";
 import type { ActionItem, ActionItemStatus, ActionItemUrgency, ConnectorStatus } from "../lib/types";
 import { suggestedReminderForInboxItem, fromDateTimeLocal, formatLocalDateTimeSlot, addMinutesLocal } from "../lib/utils";
 
@@ -27,7 +27,6 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
       return b.extractedAt.localeCompare(a.extractedAt);
     });
   const googleClientId = (snapshot.settings as any).googleClientId as string ?? "";
-  const hasActivePlan = snapshot.session?.status === "active" || snapshot.session?.status === "paused";
 
   async function handleConnect() {
     setBusy(true);
@@ -66,10 +65,6 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
   }
 
   async function handleUpdateItem(itemId: string, status: ActionItemStatus) {
-    if (status === "promoted" && !hasActivePlan) {
-      setError(t("inboxNoActivePlan"));
-      return;
-    }
     if (status === "promoted") {
       const item = inboxItems.find((candidate) => candidate.id === itemId);
       const scheduleAt = scheduleDrafts[itemId] || (item ? suggestedReminderForInboxItem(item) : "");
@@ -155,8 +150,8 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
                 const reminderEnabled = reminderEnabledDrafts[item.id] ?? true;
                 const reminderValue = reminderDrafts[item.id] ?? addMinutesLocal(scheduleValue, -10);
                 return (
-                  <article key={item.id} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
-                    <div style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
+                  <article className="inbox-item-card" key={item.id} style={{ background: "rgba(255,255,255,0.04)", borderRadius: 8, padding: "1rem", display: "flex", flexDirection: "column", gap: "0.5rem" }}>
+                    <div className="inbox-item-head" style={{ display: "flex", alignItems: "flex-start", gap: "0.5rem" }}>
                       {item.source === "calendar" ? <CalendarClock size={14} style={{ flexShrink: 0, opacity: 0.7, marginTop: 2 }} /> : <Monitor size={14} style={{ flexShrink: 0, opacity: 0.7, marginTop: 2 }} />}
                       <strong style={{ flex: 1, fontSize: "0.9rem" }}>{item.title}</strong>
                       {index === 0 && item.status === "pending" && (
@@ -174,7 +169,7 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
                     <div style={{ display: "flex", alignItems: "center", gap: "0.5rem", flexWrap: "wrap" }}>
                       {item.suggestedTaskType && (
                         <span style={{ fontSize: "0.7rem", padding: "2px 7px", borderRadius: 10, background: "rgba(255,255,255,0.08)", opacity: 0.8 }}>
-                          {item.suggestedTaskType}
+                          {taskTypeLabel(item.suggestedTaskType, language)}
                         </span>
                       )}
                       {item.dueHint && (
@@ -192,22 +187,44 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
                             <strong>{formatLocalDateTimeSlot(scheduleValue)}</strong>
                             <small>{reminderEnabled ? `${t("inboxReminderAt")}: ${formatLocalDateTimeSlot(reminderValue)}` : t("inboxNoReminder")}</small>
                           </div>
-                          <label className="inbox-reminder-field">
-                            {t("inboxChangeSlot")}
-                            <input
-                              type="datetime-local"
-                              value={scheduleValue}
-                              onChange={(event) => {
-                                const nextSchedule = event.currentTarget.value;
-                                setScheduleDrafts({ ...scheduleDrafts, [item.id]: nextSchedule });
-                                if (!(item.id in reminderDrafts)) {
-                                  setReminderDrafts({ ...reminderDrafts, [item.id]: addMinutesLocal(nextSchedule, -10) });
-                                }
-                              }}
-                              title={t("inboxReminderHint")}
-                            />
-                          </label>
-                          <label className="inbox-reminder-toggle">
+                          <div className="inbox-time-grid">
+                            <label className="inbox-reminder-field">
+                              {t("inboxChangeSlot")}
+                              <input
+                                type="datetime-local"
+                                value={scheduleValue}
+                                onChange={(event) => {
+                                  const nextSchedule = event.currentTarget.value;
+                                  setScheduleDrafts({ ...scheduleDrafts, [item.id]: nextSchedule });
+                                  if (!(item.id in reminderDrafts)) {
+                                    setReminderDrafts({ ...reminderDrafts, [item.id]: addMinutesLocal(nextSchedule, -10) });
+                                  }
+                                }}
+                                title={t("inboxReminderHint")}
+                              />
+                            </label>
+                            <div className="inbox-reminder-column">
+                              <label className={`inbox-reminder-field ${reminderEnabled ? "" : "reserved"}`} aria-hidden={!reminderEnabled}>
+                                {t("inboxReminderAt")}
+                                <input
+                                  type="datetime-local"
+                                  value={reminderValue}
+                                  disabled={!reminderEnabled}
+                                  tabIndex={reminderEnabled ? 0 : -1}
+                                  onChange={(event) => setReminderDrafts({ ...reminderDrafts, [item.id]: event.currentTarget.value })}
+                                />
+                              </label>
+                            </div>
+                          </div>
+                        </>
+                      )}
+                      <div className="inbox-actions-row">
+                        <button className="primary" disabled={item.status === "promoted"} style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "promoted")}>
+                          {item.status === "promoted" ? <Check size={13} /> : <Plus size={13} />}
+                          {item.status === "promoted" ? t("inboxAdded") : t("inboxPromote")}
+                        </button>
+                        {item.status !== "promoted" && (
+                          <label className="inbox-reminder-toggle action-toggle">
                             <input
                               type="checkbox"
                               checked={reminderEnabled}
@@ -215,25 +232,11 @@ export function InboxScreen({ snapshot, language, onStartOnItem }: { snapshot: A
                             />
                             {t("inboxReminderToggle")}
                           </label>
-                          {reminderEnabled && (
-                            <label className="inbox-reminder-field">
-                              {t("inboxReminderAt")}
-                              <input
-                                type="datetime-local"
-                                value={reminderValue}
-                                onChange={(event) => setReminderDrafts({ ...reminderDrafts, [item.id]: event.currentTarget.value })}
-                              />
-                            </label>
-                          )}
-                        </>
-                      )}
-                      <button className="primary" disabled={item.status === "promoted"} style={{ fontSize: "0.8rem", padding: "4px 12px" }} title={!hasActivePlan ? t("inboxNoActivePlan") : undefined} onClick={() => handleUpdateItem(item.id, "promoted")}>
-                        {item.status === "promoted" ? <Check size={13} /> : <Plus size={13} />}
-                        {item.status === "promoted" ? t("inboxAdded") : t("inboxPromote")}
-                      </button>
-                      {item.status !== "promoted" && <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
-                        {t("inboxDismiss")}
-                      </button>}
+                        )}
+                        {item.status !== "promoted" && <button style={{ fontSize: "0.8rem", padding: "4px 12px" }} onClick={() => handleUpdateItem(item.id, "dismissed")}>
+                          {t("inboxDismiss")}
+                        </button>}
+                      </div>
                     </div>
                   </article>
                 );

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { AlertTriangle, Check, Clock, LoaderCircle, ListChecks, Mic, Plus, Trash2 } from "lucide-react";
 import { taskTypes, type AppSnapshot, type NerveSettings, type PlanStepDraft, type TaskType } from "@nerve/shared";
-import { useCopy } from "../lib/copy";
+import { taskTypeLabel, useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
 import { hasPastDeadline, isToday, toDateTimeLocal, fromDateTimeLocal, addMinutesIso, syncedRoutinePatch, sortBySchedule, parseDeadlineText } from "../lib/utils";
 
@@ -343,7 +343,7 @@ export function SessionStart({
                 <div className="activity-controls">
                   <select value={step.taskType || detectedTaskTypes[0] || "Personal / life"} onChange={(event) => patchParsedStep(index, { taskType: event.currentTarget.value as TaskType })}>
                     {taskTypes.filter((type) => type !== "Mixed work").map((type) => (
-                      <option key={type} value={type}>{type}</option>
+                      <option key={type} value={type}>{taskTypeLabel(type, settings.language)}</option>
                     ))}
                   </select>
                   <label className="checkbox-row" style={{ marginTop: 4 }}>

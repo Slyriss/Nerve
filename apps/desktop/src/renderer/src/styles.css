@@ -810,6 +810,16 @@ h3 {
   padding: 22px;
 }
 
+.step-card-body {
+  min-height: 0;
+  display: grid;
+  gap: var(--space-3);
+}
+
+.step-card-actions {
+  min-height: 0;
+}
+
 .step-card-head {
   display: flex;
   align-items: flex-start;
@@ -1350,6 +1360,34 @@ figure,
   font-size: 16px;
 }
 
+.calendar-day-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+}
+
+.calendar-reminder-toggle {
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  border: 1px solid rgba(29, 33, 37, 0.08);
+  border-radius: 8px;
+  color: var(--muted);
+  background: rgba(255, 255, 255, 0.58);
+  font-size: 11px;
+  font-weight: 700;
+}
+
+.calendar-reminder-toggle input {
+  width: 14px;
+  height: 14px;
+  min-height: 0;
+}
+
 .calendar-day-head span {
   min-width: 26px;
   min-height: 26px;
@@ -1369,8 +1407,9 @@ figure,
 
 .calendar-items article {
   display: grid;
-  grid-template-columns: 74px 1fr;
+  grid-template-columns: 74px 1fr auto;
   gap: var(--space-3);
+  align-items: start;
   padding: 11px 12px;
   border: 1px solid rgba(29, 33, 37, 0.08);
   border-radius: var(--radius-card);
@@ -1398,6 +1437,15 @@ figure,
 .calendar-items span {
   color: var(--muted);
   font-size: 12px;
+}
+
+.calendar-delete-btn {
+  width: 30px;
+  min-height: 30px;
+  padding: 0;
+  color: #8f2d43;
+  background: rgba(255, 247, 247, 0.72);
+  border-color: rgba(177, 59, 59, 0.18);
 }
 
 .history-list {
@@ -1579,18 +1627,39 @@ figure,
   font-weight: 700;
 }
 
+.inbox-item-card {
+  max-width: 100%;
+  overflow: hidden;
+}
+
+.inbox-item-card p,
+.inbox-item-card strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.inbox-item-head {
+  min-width: 0;
+  max-width: 100%;
+  flex-wrap: wrap;
+}
+
 .inbox-schedule-row {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(220px, 0.34fr) minmax(0, 1fr);
   align-items: end;
   gap: 8px;
-  flex-wrap: wrap;
   margin-top: 0.25rem;
+  max-width: 100%;
 }
 
 .inbox-schedule-preview {
   display: grid;
   gap: 3px;
-  min-width: 210px;
+  min-width: 0;
+  max-width: 100%;
+  min-height: 86px;
+  align-content: center;
   padding: 8px 10px;
   border: 1px solid rgba(95, 143, 206, 0.18);
   border-radius: 8px;
@@ -1609,6 +1678,21 @@ figure,
   font-size: 13px;
 }
 
+.inbox-time-grid {
+  min-width: 0;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 12px;
+  align-items: start;
+}
+
+.inbox-reminder-column {
+  min-width: 0;
+  display: grid;
+  gap: 8px;
+  align-content: start;
+}
+
 .inbox-reminder-toggle {
   min-height: 30px;
   display: inline-flex;
@@ -1619,10 +1703,25 @@ figure,
   font-weight: 700;
 }
 
+.inbox-reminder-toggle.action-toggle {
+  min-height: 34px;
+  padding: 0 10px;
+  border: 1px solid rgba(29, 33, 37, 0.08);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.58);
+  color: var(--ink-700);
+  font-size: 12px;
+}
+
 .inbox-reminder-toggle input {
   width: 16px;
   height: 16px;
   min-height: 0;
+}
+
+.inbox-reminder-field.reserved {
+  display: none;
+  pointer-events: none;
 }
 
 .reminder-panel article {
@@ -1659,6 +1758,43 @@ figure,
 
 .inbox-reminder-field input {
   min-height: 30px;
+  width: 100%;
+  min-width: 0;
+  max-width: 100%;
+}
+
+.inbox-schedule-row > button {
+  width: fit-content;
+  min-width: 100px;
+  align-self: end;
+}
+
+.inbox-actions-row {
+  grid-column: 2;
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+@media (max-width: 1180px) {
+  .inbox-schedule-row {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .inbox-schedule-row > button {
+    justify-self: start;
+  }
+
+  .inbox-actions-row {
+    grid-column: 1;
+  }
+}
+
+@media (max-width: 760px) {
+  .inbox-time-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
 }
 
 .thumb-grid {
@@ -2388,6 +2524,24 @@ body:has(.cat-screen-window) {
   box-shadow: 0 18px 44px rgba(63, 111, 175, 0.12);
 }
 
+.overlay-expanded .step-card.compact {
+  min-height: 0;
+  max-height: 100%;
+  grid-template-rows: auto auto auto auto minmax(86px, 1fr) auto;
+}
+
+.overlay-expanded .step-card.compact .step-card-body {
+  overflow-y: auto;
+  padding-right: 2px;
+}
+
+.overlay-expanded .step-card.compact .step-card-actions {
+  position: sticky;
+  bottom: 0;
+  padding-top: 6px;
+  background: linear-gradient(180deg, rgba(235, 245, 255, 0), rgba(235, 245, 255, 0.86) 22%);
+}
+
 .overlay-expanded .cat-mascot.small {
   --cat-size: 72px;
 }
@@ -2902,6 +3056,10 @@ button.danger-sm {
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 7px;
+}
+
+.overlay-link-row .close-app-button {
+  grid-column: 1 / -1;
 }
 
 @keyframes voicePulse {

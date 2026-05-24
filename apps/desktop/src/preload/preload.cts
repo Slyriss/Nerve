@@ -23,6 +23,7 @@ const nerve = {
     ipcRenderer.invoke("nerve:updateSettings", patch),
   setOverlayExpanded: (expanded: boolean): Promise<void> => ipcRenderer.invoke("nerve:setOverlayExpanded", expanded),
   openMain: (route?: string): Promise<void> => ipcRenderer.invoke("nerve:openMain", route),
+  quitApp: (): Promise<void> => ipcRenderer.invoke("nerve:quitApp"),
   openScreenshotFolder: (): Promise<string> => ipcRenderer.invoke("nerve:openScreenshotFolder"),
   getSessions: (): Promise<SessionSummaryRecord[]> => ipcRenderer.invoke("nerve:getSessions"),
   getSessionLog: (sessionId: string): Promise<SessionLogData | null> => ipcRenderer.invoke("nerve:getSessionLog", sessionId),
@@ -39,13 +40,14 @@ const nerve = {
   fetchInbox: (): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:fetchInbox"),
   updateInboxItem: (itemId: string, status: "pending" | "promoted" | "dismissed"): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:updateInboxItem", itemId, status),
-  promoteInboxItem: (itemId: string, input: { reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> =>
+  promoteInboxItem: (itemId: string, input: { reminderAt?: string | null; dueAt?: string | null }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:promoteInboxItem", itemId, input),
   addNoteToPlan: (input: { note: string; reminderAt: string; dueAt?: string | null }): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:addNoteToPlan", input),
   startReminder: (reminderId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:startReminder", reminderId),
   snoozeReminder: (reminderId: string, reminderAt: string): Promise<AppSnapshot> =>
     ipcRenderer.invoke("nerve:snoozeReminder", reminderId, reminderAt),
+  deleteReminder: (reminderId: string): Promise<AppSnapshot> => ipcRenderer.invoke("nerve:deleteReminder", reminderId),
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, snapshot: AppSnapshot) => callback(snapshot);
     ipcRenderer.on("nerve:snapshot", listener);

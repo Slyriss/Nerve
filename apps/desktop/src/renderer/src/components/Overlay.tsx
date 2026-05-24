@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronLeft, ChevronRight, Clock, LoaderCircle, Mic, Pause, Volume2 } from "lucide-react";
+import { Check, ChevronLeft, ChevronRight, Clock, LoaderCircle, Mic, Pause, Volume2, X } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
 import { useCopy } from "../lib/copy";
 import { useNow } from "../lib/hooks";
@@ -115,6 +115,9 @@ export function Overlay({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setS
                 {snapshot.session?.status === "active" && <button onClick={async () => setSnapshot(await window.nerve.pauseSession())}>{t("pauseSession")}</button>}
                 {snapshot.session?.status === "paused" && <button onClick={async () => setSnapshot(await window.nerve.resumeSession())}>{t("resumeSession")}</button>}
                 <button onClick={() => window.nerve.openMain("/settings")}>{t("settings")}</button>
+                <button className="danger-sm close-app-button" onClick={() => window.nerve.quitApp()}>
+                  <X size={14} /> {t("closeApp")}
+                </button>
               </div>
               {snapshot.session && snapshot.session.status !== "completed" && (
                 confirmEnd ? (

@@ -110,7 +110,7 @@ function App() {
       {showHandoff && <ActiveSessionHandoff snapshot={snapshot} setSnapshot={setSnapshot} setView={setView} />}
       {!showHandoff && view === "start" && <SessionStart setSnapshot={setSnapshot} settings={snapshot.settings} prefillGoal={prefillGoal} />}
       {!showHandoff && view === "plan" && <PlanEditor snapshot={snapshot} setSnapshot={setSnapshot} />}
-      {view === "calendar" && <CalendarScreen snapshot={snapshot} />}
+      {view === "calendar" && <CalendarScreen snapshot={snapshot} setSnapshot={setSnapshot} />}
       {!showHandoff && view === "log" && <SessionLog snapshot={snapshot} setSnapshot={setSnapshot} />}
       {view === "history" && <SessionHistory />}
       {view === "inbox" && <InboxScreen snapshot={snapshot} language={snapshot.settings.language} onStartOnItem={(g) => { setPrefillGoal(g); setView("start"); }} />}

@@ -242,19 +242,19 @@ export function calendarItems(snapshot: AppSnapshot): CalendarItem[] {
   const items: CalendarItem[] = [];
   for (const step of snapshot.steps) {
     if (step.reminderAt) {
-      items.push({ id: `${step.id}:reminder`, dateKey: localDateKey(step.reminderAt), at: step.reminderAt, kind: "reminder", title: step.title, subtitle: step.nextAction, status: step.status, taskType: step.taskType });
+      items.push({ id: `${step.id}:reminder`, source: "step", sourceId: step.id, dateKey: localDateKey(step.reminderAt), at: step.reminderAt, kind: "reminder", title: step.title, subtitle: step.nextAction, status: step.status, taskType: step.taskType });
     }
     if (step.dueAt) {
-      items.push({ id: `${step.id}:due`, dateKey: localDateKey(step.dueAt), at: step.dueAt, kind: "due", title: step.title, subtitle: step.deadlineText || "Due", status: step.status, taskType: step.taskType });
+      items.push({ id: `${step.id}:due`, source: "step", sourceId: step.id, dateKey: localDateKey(step.dueAt), at: step.dueAt, kind: "due", title: step.title, subtitle: step.deadlineText || "Due", status: step.status, taskType: step.taskType });
     }
     if (step.routineNextAt) {
-      items.push({ id: `${step.id}:routine`, dateKey: localDateKey(step.routineNextAt), at: step.routineNextAt, kind: "routine", title: step.title, subtitle: `Routine · every ${step.routineIntervalMinutes}m`, status: step.status, taskType: step.taskType });
+      items.push({ id: `${step.id}:routine`, source: "step", sourceId: step.id, dateKey: localDateKey(step.routineNextAt), at: step.routineNextAt, kind: "routine", title: step.title, subtitle: `Routine · every ${step.routineIntervalMinutes}m`, status: step.status, taskType: step.taskType });
     }
   }
   for (const reminder of snapshot.reminders) {
     if (reminder.status === "dismissed") continue;
     if (reminder.stepId && reminder.status === "scheduled") continue;
-    items.push({ id: `reminder:${reminder.id}`, dateKey: localDateKey(reminder.reminderAt), at: reminder.reminderAt, kind: "reminder", title: reminder.title, subtitle: reminder.message, status: reminder.status, taskType: reminder.taskType });
+    items.push({ id: `reminder:${reminder.id}`, source: reminder.stepId ? "step" : "reminder", sourceId: reminder.stepId ?? reminder.id, dateKey: localDateKey(reminder.reminderAt), at: reminder.reminderAt, kind: "reminder", title: reminder.title, subtitle: reminder.message, status: reminder.status, taskType: reminder.taskType });
   }
   return items.filter((item) => item.dateKey).sort((a, b) => a.at.localeCompare(b.at));
 }

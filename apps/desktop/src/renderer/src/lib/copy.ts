@@ -5,6 +5,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     privateCopilot: "Private task co-pilot",
     session: "Session",
     settings: "Settings",
+    closeApp: "Close app",
     runningSideTab: "别meow鱼 is running in the side tab.",
     handoffBody: "You can close or ignore this main window. The current step and any gentle prompts will stay in the slim sidebar.",
     endSession: "End session",
@@ -40,6 +41,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     cancelThinking: "Cancel thinking pause",
     delay: "5 more minutes",
     thinkingHold: "Got it. I'll hold this step while you think.",
+    completeCount: "complete",
     routine: "Routine",
     repeatRoutine: "Repeat routine task",
     routineEvery: "Repeat every",
@@ -71,6 +73,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     language: "Language",
     english: "English",
     mandarin: "Mandarin",
+    showReminders: "Show reminders",
     aiProvider: "AI provider",
     deepseekKey: "DeepSeek API key",
     deepseekModel: "DeepSeek model",
@@ -131,6 +134,8 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     startNow: "Start now",
     remindLater: "Remind later",
     setReminder: "Set reminder",
+    deleteScheduledItem: "Delete task",
+    deleteScheduledItemConfirm: "Delete this scheduled task?",
     connectors: "Connectors",
     googleClientId: "Google Client ID",
     googleClientIdHint: "Create a Desktop app OAuth client at console.cloud.google.com",
@@ -155,6 +160,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     privateCopilot: "私人任务辅助",
     session: "会话",
     settings: "设置",
+    closeApp: "关闭应用",
     runningSideTab: "别meow鱼 正在侧边栏运行。",
     handoffBody: "你可以关闭或忽略主窗口。当前步骤和温和提示会留在右侧小栏里。",
     endSession: "结束会话",
@@ -190,6 +196,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     cancelThinking: "取消思考暂停",
     delay: "再给我 5 分钟",
     thinkingHold: "收到。我会先帮你保留这一步。",
+    completeCount: "已完成",
     routine: "例行任务",
     repeatRoutine: "重复例行任务",
     routineEvery: "重复间隔",
@@ -221,6 +228,7 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     language: "语言",
     english: "英语",
     mandarin: "中文",
+    showReminders: "显示提醒",
     aiProvider: "AI 提供方",
     deepseekKey: "DeepSeek API 密钥",
     deepseekModel: "DeepSeek 模型",
@@ -281,6 +289,8 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
     startNow: "现在开始",
     remindLater: "稍后提醒",
     setReminder: "设置提醒",
+    deleteScheduledItem: "删除任务",
+    deleteScheduledItemConfirm: "删除这个计划任务吗？",
     connectors: "连接器",
     googleClientId: "Google 客户端 ID",
     googleClientIdHint: "在 console.cloud.google.com 创建桌面应用 OAuth 客户端",
@@ -305,4 +315,33 @@ const copy: Record<"en" | "zh", Record<CopyKey, string>> = {
 
 export function useCopy(language: "en" | "zh") {
   return (key: CopyKey) => copy[language][key];
+}
+
+const taskTypeCopy: Record<"en" | "zh", Record<string, string>> = {
+  en: {},
+  zh: {
+    "Essay writing": "论文写作",
+    "General writing": "普通写作",
+    Coding: "编程",
+    Research: "研究",
+    Study: "学习",
+    "Email or admin": "邮件/行政",
+    Presentation: "演示文稿",
+    "Personal / life": "个人/生活",
+    "Health / self-care": "健康/自我照顾",
+    "Household / chores": "家务",
+    Errands: "外出办事",
+    Meals: "用餐",
+    "Pet care": "宠物照顾",
+    Exercise: "运动",
+    "Social / communication": "社交/沟通",
+    "Finance / bills": "财务/账单",
+    "Design or creative": "设计/创作",
+    Planning: "计划",
+    "Mixed work": "混合任务"
+  }
+};
+
+export function taskTypeLabel(taskType: string, language: "en" | "zh") {
+  return taskTypeCopy[language][taskType] ?? taskType;
 }

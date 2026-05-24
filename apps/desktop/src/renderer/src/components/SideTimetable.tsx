@@ -1,4 +1,5 @@
 import type { AppSnapshot } from "@nerve/shared";
+import { taskTypeLabel } from "../lib/copy";
 import { hasPastDeadline, sortBySchedule, timeLabel, isToday } from "../lib/utils";
 
 export function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
@@ -46,7 +47,7 @@ export function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
               <span>Due {timeLabel(step.dueAt)}</span>
             </div>
             <div className="side-activity">
-              <span>{step.taskType}</span>
+              <span>{taskTypeLabel(step.taskType, snapshot.settings.language)}</span>
               <strong>{step.title}</strong>
               <p>{step.routineIntervalMinutes ? `Routine · every ${step.routineIntervalMinutes}m` : step.id === activeId ? "Current step" : step.status}</p>
             </div>
@@ -63,7 +64,7 @@ export function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
                 <strong>{timeLabel(reminder.reminderAt)}</strong>
               </div>
               <div className="side-activity">
-                <span>{reminder.taskType}</span>
+                <span>{taskTypeLabel(reminder.taskType, snapshot.settings.language)}</span>
                 <strong>{reminder.title}</strong>
               </div>
             </article>
@@ -80,7 +81,7 @@ export function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
                 <strong>{timeLabel(step.reminderAt || step.dueAt)}</strong>
               </div>
               <div className="side-activity">
-                <span>{step.taskType}</span>
+                <span>{taskTypeLabel(step.taskType, snapshot.settings.language)}</span>
                 <strong>{step.title}</strong>
               </div>
             </article>
@@ -92,7 +93,7 @@ export function SideTimetable({ snapshot }: { snapshot: AppSnapshot }) {
                 <strong>{timeLabel(reminder.reminderAt)}</strong>
               </div>
               <div className="side-activity">
-                <span>{reminder.taskType}</span>
+                <span>{taskTypeLabel(reminder.taskType, snapshot.settings.language)}</span>
                 <strong>{reminder.title}</strong>
               </div>
             </article>

@@ -17,6 +17,7 @@ interface NerveBridge {
   updateSettings: (patch: Partial<NerveSettings>) => Promise<AppSnapshot>;
   setOverlayExpanded: (expanded: boolean) => Promise<void>;
   openMain: (route?: string) => Promise<void>;
+  quitApp: () => Promise<void>;
   openScreenshotFolder: () => Promise<string>;
   getSessions: () => Promise<SessionSummaryRecord[]>;
   getSessionLog: (sessionId: string) => Promise<SessionLogData | null>;
@@ -35,6 +36,7 @@ interface NerveBridge {
   addNoteToPlan: (input: { note: string; reminderAt: string; dueAt?: string | null }) => Promise<AppSnapshot>;
   startReminder: (reminderId: string) => Promise<AppSnapshot>;
   snoozeReminder: (reminderId: string, reminderAt: string) => Promise<AppSnapshot>;
+  deleteReminder: (reminderId: string) => Promise<AppSnapshot>;
   onSnapshot: (callback: (snapshot: AppSnapshot) => void) => () => void;
   onToggleVoice: (callback: () => void) => () => void;
 }

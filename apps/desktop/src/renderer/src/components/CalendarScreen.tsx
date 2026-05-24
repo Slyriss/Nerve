@@ -1,15 +1,17 @@
 import { useState } from "react";
-import { CalendarClock, ChevronLeft, ChevronRight } from "lucide-react";
+import { CalendarClock, ChevronLeft, ChevronRight, Trash2 } from "lucide-react";
 import type { AppSnapshot } from "@nerve/shared";
+import type { CalendarItem } from "../lib/types";
 import { EmptyState } from "./EmptyState";
-import { useCopy } from "../lib/copy";
+import { taskTypeLabel, useCopy } from "../lib/copy";
 import { calendarItems, localDateKey, calendarLabel, sameMonth, monthTitle, monthCells } from "../lib/utils";
 
-export function CalendarScreen({ snapshot }: { snapshot: AppSnapshot }) {
+export function CalendarScreen({ snapshot, setSnapshot }: { snapshot: AppSnapshot; setSnapshot: (snapshot: AppSnapshot) => void }) {
   const t = useCopy(snapshot.settings.language);
   const [month, setMonth] = useState(() => new Date());
   const [selectedKey, setSelectedKey] = useState(() => localDateKey(new Date()));
-  const items = calendarItems(snapshot);
+  const [showReminders, setShowReminders] = useState(true);
+  const items = calendarItems(snapshot).filter((item) => showReminders || item.kind !== "reminder");
   const grouped = new Map<string, ReturnType<typeof calendarItems>>();
   for (const item of items) {
     grouped.set(item.dateKey, [...(grouped.get(item.dateKey) ?? []), item]);
@@ -21,6 +23,13 @@ export function CalendarScreen({ snapshot }: { snapshot: AppSnapshot }) {
     next.setMonth(month.getMonth() + delta, 1);
     setMonth(next);
   };
+  async function deleteItem(item: CalendarItem) {
+    if (!window.confirm(t("deleteScheduledItemConfirm"))) return;
+    const refreshed = item.source === "step"
+      ? await window.nerve.deleteStep(item.sourceId)
+      : await window.nerve.deleteReminder(item.sourceId);
+    setSnapshot(refreshed);
+  }
   return (
     <section className="calendar-layout">
       <div className="calendar-shell">
@@ -62,7 +71,13 @@ export function CalendarScreen({ snapshot }: { snapshot: AppSnapshot }) {
         <aside className="calendar-detail">
           <div className="calendar-day-head">
             <h3>{calendarLabel(selectedKey)}</h3>
-            <span>{selectedItems.length}</span>
+            <div className="calendar-day-actions">
+              <label className="calendar-reminder-toggle">
+                <input type="checkbox" checked={showReminders} onChange={(event) => setShowReminders(event.currentTarget.checked)} />
+                {t("showReminders")}
+              </label>
+              <span>{selectedItems.length}</span>
+            </div>
           </div>
           {selectedItems.length === 0 ? (
             <EmptyState icon={<CalendarClock size={18} />} title="No activity" body="Scheduled notes, inbox items, reminders, and due dates will appear here." />
@@ -74,8 +89,11 @@ export function CalendarScreen({ snapshot }: { snapshot: AppSnapshot }) {
                   <div>
                     <strong>{item.title}</strong>
                     <p>{item.subtitle}</p>
-                    <span>{item.kind === "due" ? "Due" : "Reminder"} · {item.taskType} · {item.status}</span>
+                    <span>{item.kind === "due" ? "Due" : "Reminder"} · {taskTypeLabel(item.taskType, snapshot.settings.language)} · {item.status}</span>
                   </div>
+                  <button className="calendar-delete-btn" title={t("deleteScheduledItem")} onClick={() => deleteItem(item)}>
+                    <Trash2 size={15} />
+                  </button>
                 </article>
               ))}
             </div>

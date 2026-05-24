@@ -6,6 +6,7 @@ import {
 import { planPrompt, screenAnalysisPrompt } from "./prompts.js";
 import type {
   AIProvider,
+  AIProviderName,
   AnalyzeScreenInput,
   AnalyzeScreenOutput,
   GeneratePlanInput,
@@ -434,6 +435,113 @@ function parseAnalyzeContent(content: string, input: AnalyzeScreenInput): Analyz
     return repairedParsed.success ? repairedParsed.data : null;
   } catch {
     return null;
+  }
+}
+
+export class ClaudeAIProvider implements AIProvider {
+  readonly name = "claude" as const;
+
+  constructor(
+    private readonly apiKey: string,
+    private readonly model = "claude-haiku-4-5"
+  ) {}
+
+  async generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput> {
+    const content = await this.chat(planPrompt(input));
+    const parsed = parsePlanContent(content, input);
+    if (parsed) return parsed;
+    const repairContent = await this.chat(
+      `${planPrompt(input)}
+
+The previous response did not meet the required contract. Return strict JSON only. If the user's text contains distinct activities, return one row per activity. Every row must include title, nextAction, explanation, taskType, deadlineText, dueAt, reminderAt, routineIntervalMinutes, and routineNextAt. Use null for dueAt/reminderAt/routineIntervalMinutes/routineNextAt when not applicable.`
+    );
+    const repaired = parsePlanContent(repairContent, input);
+    if (repaired) return repaired;
+    return compactActivityPlan(input, generatePlanOutputSchema.parse(parseJsonObject(repairContent)));
+  }
+
+  async analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput> {
+    const content = await this.chat(screenAnalysisPrompt(input));
+    const parsed = parseAnalyzeContent(content, input);
+    if (parsed) return parsed;
+    const repairContent = await this.chat(
+      `${screenAnalysisPrompt(input)}
+
+The previous response did not meet the required contract. Return strict JSON only, with every required key present. Use the exact enum values from the schema.`
+    );
+    const repaired = parseAnalyzeContent(repairContent, input);
+    if (repaired) return repaired;
+    return analyzeScreenOutputSchema.parse(parseJsonObject(repairContent));
+  }
+
+  private async chat(prompt: string, retries = 1): Promise<string> {
+    if (!this.apiKey) {
+      throw new Error("Claude API key is missing.");
+    }
+    const response = await fetch("https://api.anthropic.com/v1/messages", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "x-api-key": this.apiKey,
+        "anthropic-version": "2023-06-01"
+      },
+      body: JSON.stringify({
+        model: this.model,
+        max_tokens: 4096,
+        system: "Return strict JSON only. You are calm, concise, and shame-reducing.",
+        messages: [{ role: "user", content: prompt }]
+      })
+    });
+
+    if (!response.ok) {
+      if (retries > 0 && (response.status === 429 || response.status >= 500)) {
+        await new Promise<void>((resolve) => setTimeout(resolve, 1000));
+        return this.chat(prompt, retries - 1);
+      }
+      throw new Error(`Claude request failed: ${response.status} ${response.statusText}`);
+    }
+    const data = (await response.json()) as { content?: Array<{ type: string; text?: string }> };
+    const content = data.content?.find((block) => block.type === "text")?.text;
+    if (!content) {
+      throw new Error("Claude returned no content.");
+    }
+    return content;
+  }
+}
+
+/** Tries the primary provider; falls back to the secondary on any network/server error. */
+export class FallbackAIProvider implements AIProvider {
+  readonly name: AIProviderName;
+
+  constructor(
+    private readonly primary: AIProvider,
+    private readonly secondary: AIProvider | null
+  ) {
+    this.name = primary.name;
+  }
+
+  async generatePlan(input: GeneratePlanInput): Promise<GeneratePlanOutput> {
+    try {
+      return await this.primary.generatePlan(input);
+    } catch (err) {
+      if (this.secondary) {
+        console.warn(`[Nerve] Primary provider (${this.primary.name}) failed for generatePlan, falling back to ${this.secondary.name}:`, err);
+        return this.secondary.generatePlan(input);
+      }
+      throw err;
+    }
+  }
+
+  async analyzeScreen(input: AnalyzeScreenInput): Promise<AnalyzeScreenOutput> {
+    try {
+      return await this.primary.analyzeScreen(input);
+    } catch (err) {
+      if (this.secondary) {
+        console.warn(`[Nerve] Primary provider (${this.primary.name}) failed for analyzeScreen, falling back to ${this.secondary.name}:`, err);
+        return this.secondary.analyzeScreen(input);
+      }
+      throw err;
+    }
   }
 }
 

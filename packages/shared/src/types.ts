@@ -44,7 +44,7 @@ export const taskTypes: TaskType[] = [
 export type SessionStatus = "active" | "paused" | "completed";
 export type StepStatus = "pending" | "active" | "complete";
 export type GuidanceStepStatus = "pending" | "active" | "complete";
-export type AIProviderName = "deepseek";
+export type AIProviderName = "deepseek" | "claude";
 export type UserState =
   | "on_task"
   | "productive_drift"
@@ -350,6 +350,8 @@ export interface NerveSettings {
   aiProvider: AIProviderName;
   deepseekApiKey: string;
   deepseekModel: string;
+  claudeApiKey: string;
+  claudeModel: string;
   elevenLabsApiKey: string;
   elevenLabsVoiceId: string;
   screenshotIntervalSeconds: 10 | 30 | 60;
@@ -405,6 +407,8 @@ export const defaultSettings: NerveSettings = {
   aiProvider: "deepseek",
   deepseekApiKey: "",
   deepseekModel: "deepseek-chat",
+  claudeApiKey: "",
+  claudeModel: "claude-haiku-4-5",
   elevenLabsApiKey: "",
   elevenLabsVoiceId: "21m00Tcm4TlvDq8ikWAM",
   screenshotIntervalSeconds: 10,

@@ -9,10 +9,13 @@ import { pathToFileURL } from "node:url";
 import { fileURLToPath } from "node:url";
 import {
   DeepSeekAIProvider,
+  ClaudeAIProvider,
+  FallbackAIProvider,
   defaultSettings,
   voiceCoachPrompt,
   type AIObservationRecord,
   type AIProvider,
+  type AIProviderName,
   type AnalyzeScreenInput,
   type AppSnapshot,
   type BannedSiteAlert,
@@ -114,7 +117,7 @@ if (process.platform === "win32") {
 }
 
 const settingOptions = {
-  aiProvider: ["deepseek"],
+  aiProvider: ["deepseek", "claude"] as AIProviderName[],
   screenshotIntervalSeconds: [10, 30, 60],
   stuckThresholdMinutes: [5, 8, 10],
   driftThresholdMinutes: [3, 6, 10],
@@ -869,6 +872,7 @@ function getSettings(): NerveSettings {
   for (const row of rows) settings[row.key] = JSON.parse(row.value);
   const result = settings as unknown as NerveSettings;
   result.deepseekApiKey = decryptApiKey(result.deepseekApiKey ?? "");
+  result.claudeApiKey = decryptApiKey(result.claudeApiKey ?? "");
   result.elevenLabsApiKey = decryptApiKey(result.elevenLabsApiKey ?? "");
   result.googleClientSecret = decryptApiKey(result.googleClientSecret ?? "");
   cachedSettings = result;
@@ -1084,6 +1088,12 @@ function normalizeSettingsPatch(patch: Partial<NerveSettings>): Partial<NerveSet
   }
   if (typeof patch.deepseekModel === "string" && patch.deepseekModel.trim()) {
     normalized.deepseekModel = patch.deepseekModel.trim();
+  }
+  if (typeof patch.claudeApiKey === "string") {
+    normalized.claudeApiKey = encryptApiKey(patch.claudeApiKey.trim());
+  }
+  if (typeof patch.claudeModel === "string" && patch.claudeModel.trim()) {
+    normalized.claudeModel = patch.claudeModel.trim();
   }
   if (typeof patch.elevenLabsApiKey === "string") {
     normalized.elevenLabsApiKey = encryptApiKey(patch.elevenLabsApiKey.trim());
@@ -1666,7 +1676,10 @@ function resetReminderLoop() {
 }
 
 function provider(settings = getSettings()): AIProvider {
-  return new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
+  const deepseek = new DeepSeekAIProvider(settings.deepseekApiKey || process.env.DEEPSEEK_API_KEY || "", settings.deepseekModel || process.env.DEEPSEEK_MODEL || "deepseek-chat");
+  const claudeKey = settings.claudeApiKey || process.env.ANTHROPIC_API_KEY || "";
+  const claude = claudeKey ? new ClaudeAIProvider(claudeKey, settings.claudeModel || process.env.CLAUDE_MODEL || "claude-haiku-4-5") : null;
+  return new FallbackAIProvider(deepseek, claude);
 }
 
 const analysisService = new AnalysisService(() => provider());
